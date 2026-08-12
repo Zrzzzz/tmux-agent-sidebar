@@ -37,6 +37,8 @@ CONFIG_SPEC=(
     'title|on|Session title|会话标题'
     'path|on|Working directory|工作目录'
     'tool|on|Current tool call|当前工具调用'
+    'subagents|on|Subagent count|子 agent 数量'
+    'tasks|on|Plan checklist progress|plan 清单进度'
     'elapsed|on|Elapsed time|已耗时'
     'ctxbar|on|Context usage bar|context 进度条'
     'model|on|Model name|模型名称'
@@ -153,12 +155,17 @@ render() {
     for f in "$STATE_DIR"/*.json; do
         [[ -r $f ]] || continue
 
-        local fields pane client status since tool prompt title model ctx cwd
+        local pane client status since tool title model ctx cwd
+        local plan subs subtype tdone ttotal
         IFS=$'\t' read -r pane client status since tool title model ctx cwd \
+                          plan subs subtype tdone ttotal \
             < <(jq -r '[.pane // "", .client // "claude", .status // "idle",
                         (.since // 0 | tostring), .tool // "",
                         .session_name // "", .model // "",
-                        (.ctx_pct // "" | tostring), .cwd // ""]
+                        (.ctx_pct // "" | tostring), .cwd // "",
+                        (.plan // false | tostring), (.subagents // 0 | tostring),
+                        .subagent_type // "",
+                        (.tasks_done // 0 | tostring), (.tasks_total // 0 | tostring)]
                        | @tsv' "$f" 2>/dev/null)
 
         [[ -n $pane ]] || continue
@@ -187,9 +194,13 @@ render() {
         local dir=''
         on path && [[ -n $cwd ]] && dir=" $(basename "$cwd")"
 
-        printf -v entry '%s%s%s %s%-7s%s%s\n  %s%s%s%s%s\n' \
+        local planmark=''
+        [[ $plan == true ]] && planmark="$C_YELLOW ⏸plan$C_RESET"
+
+        printf -v entry '%s%s%s %s%-7s%s%s\n  %s%s%s%s%s%s\n' \
             "$color" "$dot" "$C_RESET" "$C_BOLD" "$addr" "$C_RESET" "$dir" \
-            "$color" "$label" "$C_RESET" "${extra:+$C_DIM · $extra}" "$C_RESET"
+            "$color" "$label" "$C_RESET" "$planmark" \
+            "${extra:+$C_DIM · $extra}" "$C_RESET"
 
         if on title && [[ -n $title ]]; then
             printf -v entry '%s  %s%.28s%s\n' "$entry" "$C_DIM" "$title" "$C_RESET"
@@ -197,6 +208,21 @@ render() {
         fi
         if on tool && [[ -n $tool && $status == busy ]]; then
             printf -v entry '%s  %s⚒ %s%s\n' "$entry" "$C_DIM$C_CYAN" "$tool" "$C_RESET"
+            height=$(( height + 1 ))
+        fi
+        if on subagents && (( subs > 0 )); then
+            printf -v entry '%s  %s⑂ %d%s%s\n' "$entry" "$C_DIM$C_CYAN" \
+                "$subs" "${subtype:+ $subtype}" "$C_RESET"
+            height=$(( height + 1 ))
+        fi
+        # Plan checklist: a filled cell per completed task.
+        if on tasks && (( ttotal > 0 )); then
+            local bar='' i
+            for ((i = 0; i < ttotal && i < 12; i++)); do
+                (( i < tdone )) && bar+='▪' || bar+='▫'
+            done
+            printf -v entry '%s  %s%s %d/%d%s\n' "$entry" "$C_CYAN" \
+                "$bar" "$tdone" "$ttotal" "$C_RESET"
             height=$(( height + 1 ))
         fi
         if on ctxbar && [[ -n $ctx ]]; then

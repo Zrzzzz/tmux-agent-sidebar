@@ -6,14 +6,20 @@ A tmux sidebar that shows every Claude Code / Codex session running across your
 panes — grouped by client, with whether each one is actually working or waiting
 for you. Click an entry to jump straight to that pane.
 
-No plugin manager, no dependencies beyond `tmux` and `bash`. One script.
+State comes from **agent hooks**, not from scraping terminal output, so it stays
+correct when a TUI changes how it draws. No plugin manager, no runtime beyond
+`tmux`, `bash` and `jq`.
 
 ```
  AGENTS
 
  Claude Code · 3
 ● 0:0.1   my-project
-  busy · 7m 44s
+  busy ⏸plan · 7m 44s
+  refactor the auth layer
+  ⚒ Edit
+  ⑂ 2 Explore
+  ▪▪▫▫ 2/4
   █░░░░░░░░░ 9%
   Opus 5 (1M context)
 
@@ -68,6 +74,19 @@ bind -n MouseDown1Pane if -F '#{==:#{@agent_sidebar},1}' \
 
 Reload with `tmux source-file ~/.tmux.conf`, then press `prefix + a`.
 
+### Wire up the agents
+
+Nothing appears in the sidebar until at least one agent reports to it.
+
+```sh
+./install-hooks.sh claude    # writes ~/.claude/settings.json + status line
+./install-hooks.sh codex     # writes ~/.codex/hooks.json + feature flag
+./install-hooks.sh --uninstall
+```
+
+Claude Code picks the hooks up immediately. **Codex needs a restart**, because
+enabling `codex_hooks` in `config.toml` only takes effect at startup.
+
 Passing `#{pane_id}` is not optional. `run-shell` does not export `TMUX_PANE`
 to its child, and without an explicit target both `list-panes` and
 `split-window` fall back to the *currently active* window — which may not be
@@ -93,7 +112,11 @@ tmux-agent-sidebar.sh --config     # settings panel
 
   ❯ [ ] Clock in header
     [✓] Client group headings
+    [✓] Session title
     [✓] Working directory
+    [✓] Current tool call
+    [✓] Subagent count
+    [✓] Plan checklist progress
     [✓] Elapsed time
     [✓] Context usage bar
     [✓] Model name
@@ -102,15 +125,19 @@ tmux-agent-sidebar.sh --config     # settings panel
   ↑↓/jk move    space toggle    q save & quit
 ```
 
-| Key       | Default | Element                                   |
-|-----------|---------|-------------------------------------------|
-| `clock`   | `off`   | Clock next to the header                  |
-| `groups`  | `on`    | `Claude Code` / `Codex` group headings    |
-| `path`    | `on`    | Working directory on the entry's top line |
-| `elapsed` | `on`    | Elapsed time next to the state            |
-| `ctxbar`  | `on`    | Context usage bar                         |
-| `model`   | `on`    | Model name                                |
-| `idle`    | `on`    | List sessions that are sitting idle       |
+| Key         | Default | Element                                   |
+|-------------|---------|-------------------------------------------|
+| `clock`     | `off`   | Clock next to the header                  |
+| `groups`    | `on`    | `Claude Code` / `Codex` group headings    |
+| `title`     | `on`    | Session title                             |
+| `path`      | `on`    | Working directory on the entry's top line |
+| `tool`      | `on`    | Tool currently executing                  |
+| `subagents` | `on`    | Number of running subagents               |
+| `tasks`     | `on`    | Plan checklist progress                   |
+| `elapsed`   | `on`    | Elapsed time next to the state            |
+| `ctxbar`    | `on`    | Context usage bar                         |
+| `model`     | `on`    | Model name                                |
+| `idle`      | `on`    | List sessions that are sitting idle       |
 
 Settings are stored as `key=value` lines in
 `${XDG_CONFIG_HOME:-~/.config}/tmux-agent-sidebar.conf`, so you can also edit
@@ -132,36 +159,48 @@ combination.
 bind a run-shell 'SIDEBAR_WIDTH=42 SIDEBAR_LANG=en ~/.local/bin/tmux-agent-sidebar.sh --toggle #{pane_id}'
 ```
 
-A `zh_CN` environment gets Chinese labels automatically. State detection never
-depends on the locale — `classify()` returns fixed English keys and translation
-happens only at render time.
+A `zh_CN` environment gets Chinese labels automatically. State keys stay English
+in the state files; translation happens only at render time, so the display
+language never affects behaviour.
 
-## How the busy/idle detection works
+## Where the state comes from
 
-This is the part that is easy to get wrong, so it is worth explaining.
+Nothing is parsed out of the terminal. Two sources write one JSON file per
+pane, and the sidebar only renders those files.
+
+**Agent hooks** drive the state machine. They inherit the agent's environment,
+so `TMUX_PANE` identifies which pane an event belongs to — that is the whole
+reason this works.
+
+| Event | Effect |
+|---|---|
+| `SessionStart` | pane appears, `idle` |
+| `UserPromptSubmit` | `busy`, turn clock starts, per-turn counters reset |
+| `PostToolUse` | records the tool now executing |
+| `PermissionRequest` | `wait` — blocked on you |
+| `SubagentStart` / `SubagentStop` | subagent count |
+| `TaskCreated` / `TaskCompleted` | plan checklist progress (Claude only) |
+| `Stop` | `done` |
+| `SessionEnd` | pane disappears |
+
+**The Claude status line** supplies what no hook exposes: model, context window
+size and usage, session title, and cumulative cost. Codex reports its model in
+the hook payload directly, but has no context-usage equivalent, so Codex entries
+have no context bar.
+
+Every event is a *patch*: keys it does not set keep their previous value. A tool
+event never erases the prompt, and the status line never overwrites a status
+only the hooks can know.
+
+### Why not read the screen
 
 The obvious approach — grep the pane for a spinner line like
 `✻ Cogitated for 32s` — does not work. That line **stays on screen after the
-task finishes**, so every session that had ever done anything would read as
-busy forever.
-
-The reliable signal is that the running and finished lines have different
-shapes:
-
-```
-✽ Honking… (6m 25s · ↑ 21.1k tokens · thought for 3s)   <- running: parenthesised stats
-✻ Cogitated for 32s                                      <- finished: bare "for Ns"
-```
-
-So the script keys on the parenthesised statistics block, which only the live
-spinner has. A bare `for Ns` is reported as `done` rather than `busy`.
-
-As a fallback for TUI versions that render the running state differently, the
-script caches each pane's spinner line under `$TMPDIR` and compares across
-refreshes: if the seconds are still ticking, it is genuinely running.
-
-`wait` is checked first, since a permission prompt replaces the spinner
-entirely.
+task finishes**, so every session that had ever done anything reads as busy
+forever. Earlier versions of this tool distinguished running from finished by
+the *shape* of the rendered string (a live spinner carries parenthesised stats,
+`(6m 25s · ↑ 21.1k tokens)`, a finished one does not), which worked but broke
+the moment a TUI changed its layout. Hooks remove the guesswork.
 
 ## How click-to-jump works
 
