@@ -46,18 +46,33 @@ CONFIG_SPEC=(
     'idle|on|Show idle sessions|显示空闲会话'
 )
 
-declare -A CFG
+# Settings live in one shell variable per key (CFG_clock, CFG_groups, …).
+# macOS ships bash 3.2, which has no associative arrays; the keys come from
+# CONFIG_SPEC and are plain identifiers, so a name-built variable is safe.
+cfg_get() { eval "printf '%s' \"\${CFG_$1:-off}\""; }
+cfg_set() { eval "CFG_$1=\$2"; }
+
+# Is $1 a key CONFIG_SPEC declares?
+cfg_known() {
+    local spec key
+    for spec in "${CONFIG_SPEC[@]}"; do
+        IFS='|' read -r key _ <<<"$spec"
+        [[ $key == "$1" ]] && return 0
+    done
+    return 1
+}
 
 load_config() {
     local spec key def
     for spec in "${CONFIG_SPEC[@]}"; do
         IFS='|' read -r key def _ <<<"$spec"
-        CFG["$key"]="$def"
+        cfg_set "$key" "$def"
     done
     [[ -r $CONFIG_FILE ]] || return 0
     local k v
     while IFS='=' read -r k v; do
-        [[ -n ${CFG[$k]+set} && ( $v == on || $v == off ) ]] && CFG["$k"]="$v"
+        [[ $v == on || $v == off ]] || continue
+        cfg_known "$k" && cfg_set "$k" "$v"
     done <"$CONFIG_FILE"
     return 0
 }
@@ -68,13 +83,13 @@ save_config() {
     {
         for spec in "${CONFIG_SPEC[@]}"; do
             IFS='|' read -r key _ <<<"$spec"
-            printf '%s=%s\n' "$key" "${CFG[$key]}"
+            printf '%s=%s\n' "$key" "$(cfg_get "$key")"
         done
     } >"$CONFIG_FILE.$$" && mv -f "$CONFIG_FILE.$$" "$CONFIG_FILE"
 }
 
 # Is a display element enabled?
-on() { [[ ${CFG[$1]:-off} == on ]]; }
+on() { eval "[[ \${CFG_$1:-off} == on ]]"; }
 
 case "${SIDEBAR_LANG:-${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}}" in
     zh|zh[-_]*|*zh_CN*|*zh_SG*|*zh_TW*|*zh_HK*) I18N=zh ;;
@@ -133,6 +148,20 @@ ctx_bar() {
     printf '%s%s%s %s%d%%%s' "$c" "$out" "$C_RESET" "$C_DIM" "$pct" "$C_RESET"
 }
 
+# Look pane $1 up in the tmux pane listing $2, setting PANE_ADDR / PANE_CMD.
+# Returns 1 when tmux no longer has the pane.
+pane_info() {
+    local pid addr pcmd
+    while IFS=$'\t' read -r pid addr pcmd; do
+        if [[ $pid == "$1" ]]; then
+            PANE_ADDR="$addr"; PANE_CMD="$pcmd"
+            return 0
+        fi
+    done <<<"$2"
+    PANE_ADDR=''; PANE_CMD=''
+    return 1
+}
+
 render() {
     load_config
 
@@ -146,11 +175,9 @@ render() {
     # Panes that still exist, plus what each is running now, so state left
     # behind by a closed pane — or by an agent that exited inside a pane that
     # is still open — is ignored.
-    declare -A LIVE=() PCMD=()
-    while IFS=$'\t' read -r pid addr pcmd; do
-        LIVE["$pid"]="$addr"
-        PCMD["$pid"]="$pcmd"
-    done < <(tmux list-panes -a -F '#{pane_id}	#{session_name}:#{window_index}.#{pane_index}	#{pane_current_command}' 2>/dev/null)
+    # One tab-separated record per line; pane_info() looks a pane up in it.
+    local LIVE
+    LIVE=$(tmux list-panes -a -F '#{pane_id}	#{session_name}:#{window_index}.#{pane_index}	#{pane_current_command}' 2>/dev/null)
 
     local g_claude='' g_codex='' m_claude='' m_codex='' n_claude=0 n_codex=0
     local now; now=$(date +%s)
@@ -183,15 +210,15 @@ render() {
         # that exits inside a surviving pane would otherwise linger forever.
         # Claude keeps reporting `claude` as the pane command even while a Bash
         # tool call runs, so this does not race with normal tool use.
-        if [[ -z ${LIVE[$pane]+set} ]] ||
-           [[ ${PCMD[$pane]} =~ ^(bash|zsh|sh|fish|tcsh|ksh|dash|screen|tmux)$ ]]; then
+        if ! pane_info "$pane" "$LIVE" ||
+           [[ $PANE_CMD =~ ^(bash|zsh|sh|fish|tcsh|ksh|dash|screen|tmux)$ ]]; then
             rm -f "$f" 2>/dev/null
             continue
         fi
         [[ $pane == "$SELF_PANE" ]] && continue
         on idle || [[ $status != idle ]] || continue
 
-        local addr="${LIVE[$pane]}" label extra='' dot color entry height=3
+        local addr="$PANE_ADDR" label extra='' dot color entry height=3
         label=$(t "$status")
 
         case $status in
@@ -337,7 +364,8 @@ config_panel() {
         IFS= read -rsn1 ch || break
         case $ch in
             $'\x1b')                       # arrow keys arrive as ESC [ A/B
-                read -rsn2 -t 0.05 rest
+                # bash 3.2 (the macOS system bash) only takes whole seconds.
+                read -rsn2 -t 1 rest
                 case $rest in
                     '[A') sel=$(( (sel - 1 + n) % n )) ;;
                     '[B') sel=$(( (sel + 1) % n )) ;;
@@ -346,7 +374,7 @@ config_panel() {
             j|J)   sel=$(( (sel + 1) % n )) ;;
             ' '|'')
                 IFS='|' read -r key _ <<<"${CONFIG_SPEC[$sel]}"
-                if on "$key"; then CFG[$key]=off; else CFG[$key]=on; fi ;;
+                if on "$key"; then cfg_set "$key" off; else cfg_set "$key" on; fi ;;
             q|Q)   break ;;
         esac
     done
@@ -401,6 +429,15 @@ if [[ $1 == --toggle ]]; then
         tmux resize-pane -t "$new" -x "$width" 2>/dev/null
     fi
     exit 0
+fi
+
+# Anything left over is the refresh interval. Reject anything else instead of
+# handing it to sleep, which reports it as an illegal option.
+if [[ ! $INTERVAL =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    printf '%s: unknown argument %s\n' "${0##*/}" "$INTERVAL" >&2
+    printf 'usage: %s [refresh seconds | --once | --toggle | --config]\n' \
+        "${0##*/}" >&2
+    exit 2
 fi
 
 # Switch to the alternate screen. It has no scrollback, so the pane cannot be
