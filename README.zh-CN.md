@@ -12,7 +12,7 @@
  AGENTS
 
  Claude Code · 3
-● 0:0.1   my-project
+● my-project
   运行中 ⏸plan · 7m 44s
   重构 auth 层
   ⚒ Edit
@@ -21,18 +21,18 @@
   █░░░░░░░░░ 9%
   Opus 5 (1M context)
 
-▲ 0:1.0   api-server
+▲ api-server
   待确认 · 需要确认
   ██░░░░░░░░ 23%
   Opus 5 (1M context)
 
-✓ 0:1.1   api-server
+✓ api-server
   已完成 · 3m 前
   █░░░░░░░░░ 13%
   Opus 5 (1M context)
 
  Codex · 1
-○ 0:3.0   scratch
+○ scratch
   空闲
   gpt-5.6-terra
 ```
@@ -113,6 +113,7 @@ tmux-agent-sidebar.sh --config     # 设置面板
 
   ❯ [ ] 顶部时间
     [✓] 客户端分组
+    [ ] pane 地址 (0:1.2)
     [✓] 会话标题
     [✓] 工作目录
     [✓] 当前工具调用
@@ -130,6 +131,7 @@ tmux-agent-sidebar.sh --config     # 设置面板
 |-------------|-------|----------------------------------|
 | `clock`     | `off` | 标题旁的时间                     |
 | `groups`    | `on`  | `Claude Code` / `Codex` 分组标题 |
+| `addr`      | `off` | tmux 地址 `session:window.pane`  |
 | `title`     | `on`  | 会话标题                         |
 | `path`      | `on`  | 条目首行的工作目录               |
 | `tool`      | `on`  | 正在执行的工具                   |

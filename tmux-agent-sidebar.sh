@@ -34,6 +34,7 @@ CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/tmux-agent-sidebar.conf"
 CONFIG_SPEC=(
     'clock|off|Clock in header|顶部时间'
     'groups|on|Client group headings|客户端分组'
+    'addr|off|Pane address (0:1.2)|pane 地址 (0:1.2)'
     'title|on|Session title|会话标题'
     'path|on|Working directory|工作目录'
     'tool|on|Current tool call|当前工具调用'
@@ -204,14 +205,24 @@ render() {
         # "elapsed" governs timings only; a wait entry keeps its explanation.
         [[ $status == wait ]] || on elapsed || extra=''
 
-        local dir=''
-        on path && [[ -n $cwd ]] && dir=" $(basename "$cwd")"
+        # Headline: the tmux address, the directory, or both. Whichever is
+        # leftmost identifies the entry and gets the emphasis; if both are
+        # switched off the address comes back, since a row needs a label.
+        local a='' d='' head
+        on addr && a="$addr"
+        on path && [[ -n $cwd ]] && d=$(basename "$cwd")
+        [[ -n $a || -n $d ]] || a="$addr"
+        if [[ -n $a && -n $d ]]; then
+            printf -v head '%s%-7s%s %s' "$C_BOLD" "$a" "$C_RESET" "$d"
+        else
+            printf -v head '%s%s%s' "$C_BOLD" "${a:-$d}" "$C_RESET"
+        fi
 
         local planmark=''
         [[ $plan == true ]] && planmark="$C_YELLOW ⏸plan$C_RESET"
 
-        printf -v entry '%s%s%s %s%-7s%s%s\n  %s%s%s%s%s%s\n' \
-            "$color" "$dot" "$C_RESET" "$C_BOLD" "$addr" "$C_RESET" "$dir" \
+        printf -v entry '%s%s%s %s\n  %s%s%s%s%s%s\n' \
+            "$color" "$dot" "$C_RESET" "$head" \
             "$color" "$label" "$C_RESET" "$planmark" \
             "${extra:+$C_DIM · $extra}" "$C_RESET"
 

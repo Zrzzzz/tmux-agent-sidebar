@@ -14,7 +14,7 @@ correct when a TUI changes how it draws. No plugin manager, no runtime beyond
  AGENTS
 
  Claude Code · 3
-● 0:0.1   my-project
+● my-project
   busy ⏸plan · 7m 44s
   refactor the auth layer
   ⚒ Edit
@@ -23,18 +23,18 @@ correct when a TUI changes how it draws. No plugin manager, no runtime beyond
   █░░░░░░░░░ 9%
   Opus 5 (1M context)
 
-▲ 0:1.0   api-server
+▲ api-server
   wait · needs confirmation
   ██░░░░░░░░ 23%
   Opus 5 (1M context)
 
-✓ 0:1.1   api-server
+✓ api-server
   done · 3m
   █░░░░░░░░░ 13%
   Opus 5 (1M context)
 
  Codex · 1
-○ 0:3.0   scratch
+○ scratch
   idle
   █░░░░░░░░░ 1%
   gpt-5.6-terra medium
@@ -112,6 +112,7 @@ tmux-agent-sidebar.sh --config     # settings panel
 
   ❯ [ ] Clock in header
     [✓] Client group headings
+    [ ] Pane address (0:1.2)
     [✓] Session title
     [✓] Working directory
     [✓] Current tool call
@@ -129,6 +130,7 @@ tmux-agent-sidebar.sh --config     # settings panel
 |-------------|---------|-------------------------------------------|
 | `clock`     | `off`   | Clock next to the header                  |
 | `groups`    | `on`    | `Claude Code` / `Codex` group headings    |
+| `addr`      | `off`   | tmux address, `session:window.pane`       |
 | `title`     | `on`    | Session title                             |
 | `path`      | `on`    | Working directory on the entry's top line |
 | `tool`      | `on`    | Tool currently executing                  |
