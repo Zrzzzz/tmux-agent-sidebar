@@ -142,11 +142,14 @@ render() {
         printf '%s AGENTS%s\n\n' "$C_BOLD$C_CYAN" "$C_RESET"
     fi
 
-    # Panes that still exist, so state left behind by a closed pane is ignored.
-    declare -A LIVE=()
-    while IFS=$'\t' read -r pid addr; do
+    # Panes that still exist, plus what each is running now, so state left
+    # behind by a closed pane — or by an agent that exited inside a pane that
+    # is still open — is ignored.
+    declare -A LIVE=() PCMD=()
+    while IFS=$'\t' read -r pid addr pcmd; do
         LIVE["$pid"]="$addr"
-    done < <(tmux list-panes -a -F '#{pane_id}	#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
+        PCMD["$pid"]="$pcmd"
+    done < <(tmux list-panes -a -F '#{pane_id}	#{session_name}:#{window_index}.#{pane_index}	#{pane_current_command}' 2>/dev/null)
 
     local g_claude='' g_codex='' m_claude='' m_codex='' n_claude=0 n_codex=0
     local now; now=$(date +%s)
@@ -174,8 +177,13 @@ render() {
                        | join("")' "$f" 2>/dev/null)
 
         [[ -n $pane ]] || continue
-        # Drop state for panes tmux no longer has; clean the file up as we go.
-        if [[ -z ${LIVE[$pane]+set} ]]; then
+        # Drop state for panes tmux no longer has, and for panes that have
+        # dropped back to a shell — Codex has no SessionEnd event, so an agent
+        # that exits inside a surviving pane would otherwise linger forever.
+        # Claude keeps reporting `claude` as the pane command even while a Bash
+        # tool call runs, so this does not race with normal tool use.
+        if [[ -z ${LIVE[$pane]+set} ]] ||
+           [[ ${PCMD[$pane]} =~ ^(bash|zsh|sh|fish|tcsh|ksh|dash|screen|tmux)$ ]]; then
             rm -f "$f" 2>/dev/null
             continue
         fi
