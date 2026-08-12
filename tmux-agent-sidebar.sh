@@ -157,16 +157,21 @@ render() {
 
         local pane client status since tool title model ctx cwd
         local plan subs subtype tdone ttotal
-        IFS=$'\t' read -r pane client status since tool title model ctx cwd \
-                          plan subs subtype tdone ttotal \
+        # Fields are joined with US (0x1f), not tab: tab is an IFS whitespace
+        # character, so `read` would collapse runs of them and silently shift
+        # every field left of an empty one — which is what happens the moment a
+        # session has no tool running.
+        IFS=$'\x1f' read -r pane client status since tool title model ctx cwd \
+                            plan subs subtype tdone ttotal \
             < <(jq -r '[.pane // "", .client // "claude", .status // "idle",
-                        (.since // 0 | tostring), .tool // "",
+                        (.since // 0), .tool // "",
                         .session_name // "", .model // "",
-                        (.ctx_pct // "" | tostring), .cwd // "",
-                        (.plan // false | tostring), (.subagents // 0 | tostring),
+                        (.ctx_pct // ""), .cwd // "",
+                        (.plan // false), (.subagents // 0),
                         .subagent_type // "",
-                        (.tasks_done // 0 | tostring), (.tasks_total // 0 | tostring)]
-                       | @tsv' "$f" 2>/dev/null)
+                        (.tasks_done // 0), (.tasks_total // 0)]
+                       | map(tostring | gsub("[\n\r]"; " "))
+                       | join("")' "$f" 2>/dev/null)
 
         [[ -n $pane ]] || continue
         # Drop state for panes tmux no longer has; clean the file up as we go.
@@ -379,7 +384,13 @@ if [[ $1 == --toggle ]]; then
     exit 0
 fi
 
-trap 'tput cnorm 2>/dev/null; exit 0' INT TERM
+# Switch to the alternate screen. It has no scrollback, so the pane cannot be
+# scrolled back through every frame ever drawn; leaving it restores whatever
+# was on screen before.
+cleanup() { printf '\033[?1049l'; tput cnorm 2>/dev/null; }
+trap 'cleanup; exit 0' INT TERM
+trap cleanup EXIT
+printf '\033[?1049h'
 tput civis 2>/dev/null
 while :; do
     out=$(render)
