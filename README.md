@@ -85,7 +85,7 @@ Nothing appears in the sidebar until at least one agent reports to it.
 ```
 
 Claude Code picks the hooks up immediately. **Codex needs a restart**, because
-enabling `codex_hooks` in `config.toml` only takes effect at startup.
+enabling `hooks` in `config.toml` only takes effect at startup.
 
 Passing `#{pane_id}` is not optional. `run-shell` does not export `TMUX_PANE`
 to its child, and without an explicit target both `list-panes` and

@@ -23,6 +23,14 @@
 client="${1:-}"
 event="${2:-}"
 pane="${TMUX_PANE:-}"
+
+# Opt-in call trace, for working out why an agent is not reporting. Enable
+# with `touch "${TMPDIR:-/tmp}/tmux-agent-sidebar-$(id -u)/calls.log"`,
+# disable by deleting the file. Silent and near-free when absent.
+_dbg="${TMPDIR:-/tmp}/tmux-agent-sidebar-$(id -u)/calls.log"
+[[ -f $_dbg ]] && printf '%s %-6s %-14s pane=%s\n' \
+    "$(date '+%H:%M:%S')" "$client" "$event" "${TMUX_PANE:-<unset>}" >>"$_dbg" 2>/dev/null
+
 [[ -n $pane && -n $client && -n $event ]] || exit 0   # outside tmux: nothing to attribute
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/tmux-agent-sidebar/panes"

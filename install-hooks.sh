@@ -2,7 +2,7 @@
 # Wires an agent up to the sidebar by registering its hooks.
 #
 #   ./install-hooks.sh claude      Claude Code: settings.json + status line
-#   ./install-hooks.sh codex       Codex: hooks.json + codex_hooks feature flag
+#   ./install-hooks.sh codex       Codex: hooks.json + [features] hooks flag
 #   ./install-hooks.sh --uninstall Remove everything this script added
 #
 # Existing configuration is merged, never replaced, and a .bak-agent-sidebar
@@ -132,18 +132,18 @@ install_codex() {
 import os, pathlib, re
 p = pathlib.Path(os.environ["CONFIG"])
 t = p.read_text() if p.exists() else ""
-if re.search(r'^\s*codex_hooks\s*=', t, re.M):
-    print("  codex_hooks already enabled")
+if re.search(r'^\s*hooks\s*=', t, re.M):
+    print("  hooks already enabled")
 elif re.search(r'^\[features\]', t, re.M):
-    p.write_text(re.sub(r'^\[features\]', '[features]\ncodex_hooks = true',
+    p.write_text(re.sub(r'^\[features\]', '[features]\nhooks = true',
                         t, count=1, flags=re.M))
-    print("  codex_hooks = true (added to [features])")
+    print("  hooks = true (added to [features])")
 else:
     # A bare key after an existing table header would belong to that table,
     # so the new table has to go at the end of the file.
     p.write_text((t.rstrip() + "\n\n" if t.strip() else "")
-                 + "[features]\ncodex_hooks = true\n")
-    print("  [features] codex_hooks = true (appended)")
+                 + "[features]\nhooks = true\n")
+    print("  [features] hooks = true (appended)")
 PY
 
     COLLECT="$COLLECT" HOOKS="$CODEX_HOOKS" python3 - <<'PY'
@@ -238,7 +238,7 @@ print(f"  cleaned {p}")
 PY
     fi
 
-    printf 'note: [features] codex_hooks in %s was left in place —\n' "$CODEX_CONFIG"
+    printf 'note: [features] hooks in %s was left in place —\n' "$CODEX_CONFIG"
     printf '      it is a Codex feature flag, harmless without hooks.\n'
     printf 'uninstall: done\n'
 }

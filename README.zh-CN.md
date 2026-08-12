@@ -88,7 +88,7 @@ bind -n MouseDown1Pane if -F '#{==:#{@agent_sidebar},1}' \
 `.bak-agent-sidebar` 备份。
 
 Claude Code 立即生效。**Codex 必须重启**，因为 `config.toml` 里的
-`codex_hooks` 开关只在启动时读取。
+`hooks` 开关只在启动时读取。
 
 **`#{pane_id}` 不能省。** `run-shell` 不会把 `TMUX_PANE` 传给子进程，没有显式
 目标时，`list-panes` 和 `split-window` 各自会退化到「当前活动 window」——那未必
@@ -199,7 +199,7 @@ Codex 的 hooks 格式和 Claude Code 一样（事件 → matcher 组 → handle
 ```toml
 # ~/.codex/config.toml
 [features]
-codex_hooks = true
+hooks = true
 ```
 
 `install-hooks.sh codex` 会自动加这段。已有 `[features]` 表就往里插，没有就追加

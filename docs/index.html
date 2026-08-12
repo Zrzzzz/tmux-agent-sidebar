@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>tmux-agent-sidebar — know what every agent is doing</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root {
+  /* Light ground, cooled slightly toward the terminal's cyan bias so the
+     neutral reads as chosen rather than inherited. */
+  --bg:        #eef1f3;
+  --bg-sub:    #e2e7ea;
+  --fg:        #1a2229;
+  --fg-muted:  #56656f;
+  --fg-faint:  #7d8b95;
+  --rule:      #cbd3d8;
+  --accent:    #b8552c;
+  --accent-dim:#8f421f;
+  --link:      #1f6f76;
+  /* The terminal window keeps its own palette in both themes: it stands in
+     for a real terminal, and a light-mode terminal would be a different
+     product. These stay fixed on purpose. */
+  --term-bg:     #0e1317;
+  --term-panel:  #131a20;
+  --term-fg:     #c8d3dc;
+  --term-dim:    #6b7d8a;
+  --term-faint:  #47555f;
+  --term-rule:   #223038;
+  --claude:      #ff875f;
+  --codex:       #87d787;
+  --st-busy:     #5fc95f;
+  --st-wait:     #e5c07b;
+  --st-done:     #56b6c2;
+  --st-idle:     #6b7d8a;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:       #0b0f12;
+    --bg-sub:   #121a1f;
+    --fg:       #d3dde4;
+    --fg-muted: #8fa0ac;
+    --fg-faint: #64757f;
+    --rule:     #23303a;
+    --accent:   #ff9166;
+    --accent-dim:#c96a44;
+    --link:     #63c8cf;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:       #0b0f12;
+  --bg-sub:   #121a1f;
+  --fg:       #d3dde4;
+  --fg-muted: #8fa0ac;
+  --fg-faint: #64757f;
+  --rule:     #23303a;
+  --accent:   #ff9166;
+  --accent-dim:#c96a44;
+  --link:     #63c8cf;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+a { color: var(--link); }
+
+/* ---------------------------------------------------------------- hero -- */
+header { padding: 72px 0 40px; }
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 20px;
+}
+h1 {
+  font-family: var(--mono);
+  font-size: clamp(30px, 5.2vw, 52px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  text-wrap: balance;
+  margin: 0 0 20px;
+}
+h1 .cursor {
+  display: inline-block;
+  width: 0.55em; height: 1em;
+  background: var(--accent);
+  vertical-align: -0.13em;
+  margin-left: 0.12em;
+}
+@media (prefers-reduced-motion: no-preference) {
+  h1 .cursor { animation: blink 1.2s steps(1) infinite; }
+}
+@keyframes blink { 50% { opacity: 0; } }
+.lede {
+  font-size: 19px;
+  color: var(--fg-muted);
+  max-width: 62ch;
+  margin: 0 0 28px;
+  text-wrap: pretty;
+}
+.lede strong { color: var(--fg); font-weight: 600; }
+
+/* ------------------------------------------------------------ terminal -- */
+.term {
+  background: var(--term-bg);
+  border: 1px solid var(--term-rule);
+  border-radius: 6px;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--term-fg);
+  box-shadow: 0 18px 44px -22px rgb(0 0 0 / 0.55);
+}
+.term-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 12px;
+  background: var(--term-panel);
+  border-bottom: 1px solid var(--term-rule);
+  color: var(--term-faint);
+  font-size: 11px;
+}
+.term-bar .dots { display: flex; gap: 6px; }
+.term-bar .dots i {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--term-rule); display: block;
+}
+.term-body { display: grid; grid-template-columns: 258px 1fr; min-height: 430px; }
+.side {
+  border-right: 1px solid var(--term-rule);
+  padding: 12px 0 16px;
+  background: linear-gradient(to right, var(--term-panel), var(--term-bg));
+  overflow-x: auto;
+}
+.side h2 {
+  font-size: 13px; font-weight: 700; letter-spacing: 0.06em;
+  color: var(--term-fg); margin: 0 0 14px; padding: 0 14px;
+}
+.grp {
+  font-size: 12px; font-weight: 700; padding: 0 14px; margin: 14px 0 6px;
+}
+.grp.claude { color: var(--claude); }
+.grp.codex  { color: var(--codex); }
+.grp span { color: var(--term-faint); font-weight: 400; }
+
+.ent {
+  display: block; width: 100%; text-align: left;
+  background: none; border: 0; border-left: 2px solid transparent;
+  color: inherit; font: inherit;
+  padding: 5px 14px 7px 12px;
+  cursor: pointer;
+}
+.ent:hover { background: #ffffff08; }
+.ent[aria-current="true"] { background: #ffffff0f; border-left-color: var(--accent); }
+.ent:focus-visible { outline: 2px solid var(--link); outline-offset: -2px; }
+.ent .r1 { display: flex; gap: 7px; align-items: baseline; }
+.ent .dot { width: 1ch; flex: none; }
+.ent .addr { font-weight: 700; }
+.ent .dir { color: var(--term-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ent .r2 { padding-left: calc(1ch + 7px); }
+.ent .meta { color: var(--term-dim); font-size: 12px; }
+.ent .plan { color: var(--st-wait); }
+.busy .dot, .busy .state { color: var(--st-busy); }
+.wait .dot, .wait .state { color: var(--st-wait); }
+.done .dot, .done .state { color: var(--st-done); }
+.idle .dot, .idle .state { color: var(--st-idle); }
+.bar { color: var(--st-busy); letter-spacing: -0.05em; }
+.bar.hot { color: var(--st-wait); }
+.bar i { color: var(--term-faint); font-style: normal; }
+
+/* right-hand pane: the session you clicked */
+.pane { padding: 14px 18px; overflow: hidden; }
+.pane .crumb {
+  color: var(--term-faint); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; margin-bottom: 12px;
+}
+.pane pre {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  font: inherit; color: var(--term-fg);
+}
+.pane .u  { color: var(--claude); }
+.pane .d  { color: var(--term-dim); }
+.pane .ok { color: var(--st-busy); }
+.pane .w  { color: var(--st-wait); }
+.pane .c  { color: var(--st-done); }
+.hint {
+  margin: 10px 0 0; font-family: var(--mono); font-size: 12px;
+  color: var(--fg-faint); text-align: center;
+}
+
+/* ---------------------------------------------------------------- body -- */
+section { padding: 56px 0; border-top: 1px solid var(--rule); }
+section:first-of-type { border-top: 0; }
+h2.sec {
+  font-family: var(--mono); font-size: 13px; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--accent); margin: 0 0 22px;
+}
+h3 { font-size: 20px; margin: 0 0 10px; letter-spacing: -0.01em; }
+p { max-width: 66ch; color: var(--fg-muted); text-wrap: pretty; }
+p.tight { margin-top: 0; }
+.cols { display: grid; gap: 34px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+
+.evt { width: 100%; border-collapse: collapse; font-size: 14px; }
+.evt td { padding: 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.evt td:first-child {
+  font-family: var(--mono); color: var(--accent-dim);
+  white-space: nowrap; padding-right: 20px; width: 1%;
+}
+.evt tr:last-child td { border-bottom: 0; }
+
+.compare {
+  font-family: var(--mono); font-size: 13px; line-height: 1.9;
+  background: var(--term-bg); color: var(--term-fg);
+  border: 1px solid var(--term-rule); border-radius: 6px;
+  padding: 14px 16px; overflow-x: auto;
+}
+.compare div { white-space: pre; }
+.compare .lbl { color: var(--term-faint); }
+.compare .live { color: var(--st-busy); }
+.compare .dead { color: var(--st-idle); }
+
+pre.sh {
+  font-family: var(--mono); font-size: 13px; line-height: 1.7;
+  background: var(--bg-sub); border: 1px solid var(--rule);
+  border-radius: 6px; padding: 14px 16px; overflow-x: auto;
+  color: var(--fg);
+}
+pre.sh .c { color: var(--fg-faint); }
+footer {
+  padding: 34px 0 60px; border-top: 1px solid var(--rule);
+  color: var(--fg-faint); font-size: 14px;
+  display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center;
+}
+footer .sp { flex: 1; }
+
+@media (max-width: 760px) {
+  .term-body { grid-template-columns: 1fr; }
+  .side { border-right: 0; border-bottom: 1px solid var(--term-rule); }
+  header { padding-top: 44px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">tmux plugin</p>
+    <h1>Which agent is<br>actually working<span class="cursor"></span></h1>
+    <p class="lede">
+      Four Claude Code panes across three windows. One is mid-plan, one is
+      blocked on a permission prompt you never saw, one finished eight minutes
+      ago. <strong>A sidebar that knows which is which</strong> — from agent
+      hooks, not from scraping what the screen happened to draw.
+    </p>
+  </header>
+
+  <div class="term">
+    <div class="term-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span>tmux — session 0 — 3 windows</span>
+    </div>
+    <div class="term-body">
+      <div class="side">
+        <h2>AGENTS</h2>
+        <div class="grp claude">Claude Code <span>· 3</span></div>
+        <div id="list-claude"></div>
+        <div class="grp codex">Codex <span>· 1</span></div>
+        <div id="list-codex"></div>
+      </div>
+      <div class="pane">
+        <div class="crumb" id="crumb"></div>
+        <pre id="screen"></pre>
+      </div>
+    </div>
+  </div>
+  <p class="hint">click an entry — the elapsed times are running</p>
+
+  <section>
+    <h2 class="sec">Where the state comes from</h2>
+    <div class="cols">
+      <div>
+        <p class="tight">
+          Hooks inherit the agent's environment, so <code>TMUX_PANE</code> tells
+          the collector which pane an event belongs to. That one fact is what
+          makes the whole thing possible — without it an event has no address.
+        </p>
+        <p>
+          Each event is a patch. Keys it doesn't set keep their previous value,
+          so a tool call never erases the prompt, and the status line never
+          overwrites a status only the hooks can know.
+        </p>
+      </div>
+      <table class="evt">
+        <tr><td>SessionStart</td><td>pane appears, idle</td></tr>
+        <tr><td>UserPromptSubmit</td><td>busy; turn clock starts, counters reset</td></tr>
+        <tr><td>PostToolUse</td><td>the tool now executing</td></tr>
+        <tr><td>PermissionRequest</td><td>wait — blocked on you</td></tr>
+        <tr><td>SubagentStart/Stop</td><td>subagent count</td></tr>
+        <tr><td>TaskCreated/Completed</td><td>plan checklist progress</td></tr>
+        <tr><td>Stop</td><td>done</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="sec">Why not read the screen</h2>
+    <p class="tight">
+      The obvious approach is to grep the pane for a spinner line. It doesn't
+      work: that line <strong>stays on screen after the task ends</strong>, so
+      every session that ever did anything reads as busy forever. These two are
+      the same session, seconds apart:
+    </p>
+    <div class="compare">
+      <div><span class="lbl">running   </span><span class="live">✽ Honking… (6m 25s · ↑ 21.1k tokens · thought for 3s)</span></div>
+      <div><span class="lbl">finished  </span><span class="dead">✻ Cogitated for 32s</span></div>
+    </div>
+    <p>
+      Earlier versions told them apart by the shape of the string — a live
+      spinner carries parenthesised stats, a finished one doesn't. It worked,
+      and it would break the day a TUI changed its layout. Hooks remove the
+      guesswork: <code>Stop</code> fires when the turn ends, and nothing has to
+      be inferred from pixels.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="sec">Install</h2>
+    <pre class="sh"><span class="c"># the sidebar and its collector</span>
+curl -o ~/.local/bin/tmux-agent-sidebar.sh \
+  https://raw.githubusercontent.com/Zrzzzz/tmux-agent-sidebar/main/tmux-agent-sidebar.sh
+curl -o ~/.local/bin/tmux-agent-sidebar-collect.sh \
+  https://raw.githubusercontent.com/Zrzzzz/tmux-agent-sidebar/main/tmux-agent-sidebar-collect.sh
+chmod +x ~/.local/bin/tmux-agent-sidebar*.sh
+
+<span class="c"># register the hooks (merges into existing config, backs it up first)</span>
+./install-hooks.sh claude
+./install-hooks.sh codex     <span class="c"># restart Codex afterwards</span></pre>
+    <p>
+      Then bind it: <code>bind a run-shell '~/.local/bin/tmux-agent-sidebar.sh
+      --toggle #{pane_id}'</code>. Passing <code>#{pane_id}</code> is not
+      optional — <code>run-shell</code> doesn't export <code>TMUX_PANE</code>,
+      and without a target tmux falls back to the currently active window,
+      which may not be the one you pressed the key in.
+    </p>
+  </section>
+
+  <footer>
+    <span>MIT</span>
+    <span>tmux 3.0+ · bash · jq</span>
+    <span class="sp"></span>
+    <a href="https://github.com/Zrzzzz/tmux-agent-sidebar">github.com/Zrzzzz/tmux-agent-sidebar</a>
+  </footer>
+</div>
+
+<script>
+"use strict";
+const SESSIONS = [
+  {
+    id: "0:0.1", client: "claude", state: "busy", plan: true,
+    dir: "tmux-agent-sidebar", title: "hook 化状态采集",
+    tool: "Edit", subs: 2, subType: "Explore", done: 2, total: 4,
+    ctx: 33, model: "Opus 5 (1M context)", t0: 464,
+    crumb: "window 0 · pane 1 — claude",
+    screen: [
+      ['u', "❯ 把状态采集改成 hook，不要再抓屏了\n\n"],
+      ['d', "● 探针先行：确认 hook 能不能定位到 pane\n"],
+      ['d', "  ⎿  TMUX_PANE=%43 — 能拿到，方案成立\n\n"],
+      ['',  "● 现在改收集器，把 6 个事件接上\n"],
+      ['d', "  ⎿  Updated tmux-agent-sidebar-collect.sh\n\n"],
+      ['c', "✽ Transmuting… (7m 44s · esc to interrupt)\n"],
+    ],
+  },
+  {
+    id: "0:1.0", client: "claude", state: "wait",
+    dir: "arvo2i", title: "补齐失败 instance 的 description",
+    tool: "Bash", subs: 0, done: 0, total: 0,
+    ctx: 23, model: "Opus 5 (1M context)", t0: 96,
+    crumb: "window 1 · pane 0 — claude",
+    screen: [
+      ['u', "❯ 跑一下 50 个 case 的对照评测\n\n"],
+      ['',  "● Bash(uv run python description_eval/run_cybergym.py --jobs 50)\n\n"],
+      ['w', "  Do you want to proceed?\n"],
+      ['w', "  ❯ 1. Yes\n"],
+      ['d', "    2. Yes, and don't ask again\n"],
+      ['d', "    3. No, tell Claude what to do differently\n\n"],
+      ['d', "  ── 已等待 1m 36s ──\n"],
+    ],
+  },
+  {
+    id: "0:1.1", client: "claude", state: "done",
+    dir: "harbor", title: "镜像区间 diff 收敛",
+    tool: "", subs: 0, done: 5, total: 5,
+    ctx: 13, model: "Opus 5 (1M context)", t0: 512,
+    crumb: "window 1 · pane 1 — claude",
+    screen: [
+      ['u', "❯ 把 build cache 的 key 换成 content hash\n\n"],
+      ['d', "● Updated 3 files, ran the suite\n"],
+      ['ok',"  ⎿  41 passed · 0 failed · 12.4s\n\n"],
+      ['',  "  cache 命中率从 34% 升到 91%，重复构建\n"],
+      ['',  "  从 6m12s 降到 48s。\n\n"],
+      ['d', "✻ Cogitated for 3m 2s\n"],
+      ['d', "❯ \n"],
+    ],
+  },
+  {
+    id: "0:2.0", client: "codex", state: "idle",
+    dir: "cybergym", title: "", tool: "", subs: 0, done: 0, total: 0,
+    ctx: null, model: "gpt-5.6-terra", t0: 0,
+    crumb: "window 2 · pane 0 — codex",
+    screen: [
+      ['d', "╭──────────────────────────────────────────╮\n"],
+      ['d', "│ >_ OpenAI Codex (v0.147.0)               │\n"],
+      ['d', "│                                          │\n"],
+      ['d', "│ model:       gpt-5.6-terra medium        │\n"],
+      ['d', "│ permissions: YOLO mode                   │\n"],
+      ['d', "╰──────────────────────────────────────────╯\n\n"],
+      ['d', "› \n"],
+    ],
+  },
+];
+
+const LABEL = { busy: "busy", wait: "wait", done: "done", idle: "idle" };
+const DOT   = { busy: "●",    wait: "▲",    done: "✓",    idle: "○" };
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let current = 0;
+const started = Date.now();
+
+function elapsed(s) {
+  if (!s.t0) return "";
+  const secs = s.t0 + (reduced ? 0 : Math.floor((Date.now() - started) / 1000));
+  const m = Math.floor(secs / 60), r = secs % 60;
+  const t = m ? `${m}m ${r}s` : `${r}s`;
+  return s.state === "done" ? `${t} ago` : t;
+}
+
+function bar(pct) {
+  if (pct == null) return "";
+  const filled = Math.max(pct > 0 ? 1 : 0, Math.round(pct / 10));
+  return `<span class="bar${pct >= 80 ? " hot" : ""}">${"█".repeat(filled)}<i>${"░".repeat(10 - filled)}</i></span> <span class="meta">${pct}%</span>`;
+}
+
+function checklist(s) {
+  if (!s.total) return "";
+  return `<span class="bar">${"▪".repeat(s.done)}<i>${"▫".repeat(s.total - s.done)}</i></span> <span class="meta">${s.done}/${s.total}</span>`;
+}
+
+function esc(t) {
+  return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function drawList() {
+  for (const client of ["claude", "codex"]) {
+    const host = document.getElementById("list-" + client);
+    host.innerHTML = "";
+    SESSIONS.forEach((s, i) => {
+      if (s.client !== client) return;
+      const b = document.createElement("button");
+      b.className = "ent " + s.state;
+      b.type = "button";
+      b.setAttribute("aria-current", i === current ? "true" : "false");
+      const ex = elapsed(s);
+      const rows = [
+        `<span class="state">${LABEL[s.state]}</span>` +
+          (s.plan ? ` <span class="plan">⏸plan</span>` : "") +
+          (ex ? ` <span class="meta">· ${ex}</span>` : "") +
+          (s.state === "wait" ? ` <span class="meta">· needs you</span>` : ""),
+      ];
+      if (s.title) rows.push(`<span class="meta">${esc(s.title)}</span>`);
+      if (s.tool && s.state === "busy") rows.push(`<span class="meta">⚒ ${s.tool}</span>`);
+      if (s.subs) rows.push(`<span class="meta">⑂ ${s.subs} ${s.subType}</span>`);
+      if (s.total) rows.push(checklist(s));
+      if (s.ctx != null) rows.push(bar(s.ctx));
+      rows.push(`<span class="meta">${s.model}</span>`);
+      b.innerHTML =
+        `<span class="r1"><span class="dot">${DOT[s.state]}</span>` +
+        `<span class="addr">${s.id}</span><span class="dir">${s.dir}</span></span>` +
+        rows.map((r) => `<span class="r2">${r}</span>`).join("");
+      b.addEventListener("click", () => { current = i; draw(); });
+      host.appendChild(b);
+    });
+  }
+}
+
+function drawPane() {
+  const s = SESSIONS[current];
+  document.getElementById("crumb").textContent = s.crumb;
+  document.getElementById("screen").innerHTML = s.screen
+    .map(([cls, txt]) => (cls ? `<span class="${cls}">${esc(txt)}</span>` : esc(txt)))
+    .join("");
+}
+
+function draw() { drawList(); drawPane(); }
+draw();
+if (!reduced) setInterval(drawList, 1000);
+</script>
+</body>
+</html>
