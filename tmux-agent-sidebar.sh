@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# 在 tmux pane 里显示所有 Claude Code / Codex 会话的状态。
-# 用法: tmux-agent-sidebar.sh [刷新间隔秒数, 默认 2]
+# Sidebar listing every Claude Code / Codex session running in tmux, with the
+# live state of each one.
+#
+# Usage: tmux-agent-sidebar.sh [refresh seconds, default 2]
+#
+# Language follows $SIDEBAR_LANG (zh|en); if unset it is taken from the usual
+# locale variables, so a zh_CN environment gets Chinese without configuration.
 
 INTERVAL="${1:-2}"
 SELF_PANE="${TMUX_PANE:-}"
@@ -8,35 +13,76 @@ SELF_PANE="${TMUX_PANE:-}"
 C_RESET=$'\033[0m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'
 C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
 C_GRAY=$'\033[90m'; C_CYAN=$'\033[36m'
+C_CLAUDE=$'\033[38;5;209m'   # Claude Code group heading
+C_CODEX=$'\033[38;5;114m'    # Codex group heading
 
 STATE_DIR="${TMPDIR:-/tmp}/tmux-agent-sidebar-$(id -u)"
 mkdir -p "$STATE_DIR"
 
-# 从 pane 内容判断状态，输出 "状态\t补充信息"
-# 想调整判断规则，改这个函数就行。
+# Row-to-pane map, one file per sidebar so several sidebars can coexist.
+map_path() { printf '%s/click-%s.map' "$STATE_DIR" "${1//[^a-zA-Z0-9]/_}"; }
+CLICK_MAP=$(map_path "$SELF_PANE")
+
+case "${SIDEBAR_LANG:-${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}}" in
+    zh|zh[-_]*|*zh_CN*|*zh_SG*|*zh_TW*|*zh_HK*) I18N=zh ;;
+    *)                                          I18N=en ;;
+esac
+
+# Display strings. classify() returns stable English keys and translation
+# happens only at render time, so the detection logic never depends on locale.
+t() {
+    if [[ $I18N == zh ]]; then
+        case $1 in
+            busy)    printf '运行中'           ;;
+            wait)    printf '待确认'           ;;
+            done)    printf '已完成'           ;;
+            idle)    printf '空闲'             ;;
+            confirm) printf '需要确认'         ;;
+            running) printf '进行中'           ;;
+            none)    printf '没有运行中的会话' ;;
+        esac
+    else
+        case $1 in
+            busy)    printf 'busy'               ;;
+            wait)    printf 'wait'               ;;
+            done)    printf 'done'               ;;
+            idle)    printf 'idle'               ;;
+            confirm) printf 'needs confirmation' ;;
+            running) printf 'running'            ;;
+            none)    printf 'No agent sessions'  ;;
+        esac
+    fi
+}
+
+# Decide a pane's state from its rendered contents.
+# Prints "<state key>\t<detail>". Edit this function to tune the rules.
 classify() {
     local pane_id="$1" body="$2"
 
-    # 1) 等待用户确认（权限弹窗 / 选择题）—— 优先级最高
+    # 1) Blocked on a permission prompt or a question. Checked first, because
+    #    the prompt replaces the spinner entirely.
     if grep -qE 'Do you want|Would you like|\(y/n\)|❯ 1\.|Press Enter to' <<<"$body"; then
-        printf 'wait\t需要确认'
+        printf 'wait\t'
         return
     fi
 
-    # 2) 正在工作。运行态的 spinner 行带括号统计：
+    # 2) Working. The live spinner carries a parenthesised stats block:
     #      ✽ Honking… (6m 25s · ↑ 21.1k tokens · thought for 3s)
-    #    而任务结束后的残留行只有 "✻ Cogitated for 32s"，没有括号——这是关键区别。
+    #    whereas a finished task leaves only "✻ Cogitated for 32s" behind.
+    #    That difference is the whole trick — see step 3.
     local run_line
     run_line=$(grep -oE '^[[:space:]]*[✻✽✢✳∗*·][^(]*\([0-9]+[hms][^)]*\)' <<<"$body" | tail -1)
     if [[ -n $run_line ]] || grep -qE 'esc to interrupt|ctrl\+c to (stop|interrupt)' <<<"$body"; then
         local el
         el=$(grep -oE '\(([0-9]+[hms][[:space:]]*)+' <<<"$run_line" | tr -d '(' | sed 's/[[:space:]]*$//')
-        printf 'busy\t%s' "${el:-运行中}"
+        printf 'busy\t%s' "$el"
         return
     fi
 
-    # 3) spinner 行 "✻ Churned for 38s"。这行在任务结束后也会留在屏幕上，
-    #    所以单次快照区分不了"在跑"和"跑完了"——靠跨轮比较秒数是否还在变。
+    # 3) A bare "✻ Churned for 38s" line. This stays on screen after the task
+    #    ends, so a single snapshot cannot tell "running" from "finished".
+    #    Treat it as finished unless the seconds are still ticking across
+    #    refreshes, which is how older TUI versions render the running state.
     local spin cache had_prev prev
     spin=$(grep -oE '^[[:space:]]*[✻✽✢✳∗*·][^|]*for [0-9]+[ms]' <<<"$body" | tail -1)
     cache="$STATE_DIR/${pane_id//[^a-zA-Z0-9]/_}.spin"
@@ -45,8 +91,6 @@ classify() {
 
     if [[ -n $spin ]]; then
         local secs; secs=$(grep -oE 'for [0-9]+[ms]' <<<"$spin" | cut -d' ' -f2)
-        # 无括号统计 = 已完成的残留行。除非秒数还在跳（老版本 TUI 的运行态格式），
-        # 那种情况下跨轮一比就能看出来。
         if (( had_prev )) && [[ $spin != "$prev" ]]; then
             printf 'busy\t%s' "$secs"
         else
@@ -58,33 +102,67 @@ classify() {
     printf 'idle\t'
 }
 
+# Which CLI is this pane running? Prints "claude", "codex", or nothing at all
+# when the pane is not an agent (a plain node/bun dev server, say).
+detect_client() {
+    local cmd="$1" body="$2"
+    case $cmd in
+        claude) printf 'claude'; return ;;
+        codex)  printf 'codex';  return ;;
+    esac
+    # Launched through a wrapper — decide from what the TUI actually renders.
+    if grep -qE 'OpenAI Codex|Context [0-9]+% used' <<<"$body"; then
+        printf 'codex'
+    elif grep -qE '\(1M context\)|bypass permissions|esc to interrupt' <<<"$body"; then
+        printf 'claude'
+    fi
+}
+
+# Progress bar for context usage, coloured by how full it is.
+ctx_bar() {
+    local pct="$1" width=10 filled i out='' c=$C_GREEN
+    filled=$(( pct * width / 100 ))
+    (( filled > width )) && filled=$width
+    (( filled < 0 ))     && filled=0
+    for ((i = 0; i < width; i++)); do
+        (( i < filled )) && out+='█' || out+='░'
+    done
+    (( pct >= 80 )) && c=$C_YELLOW
+    printf '%s%s%s %s%d%%%s' "$c" "$out" "$C_RESET" "$C_DIM" "$pct" "$C_RESET"
+}
+
 render() {
     printf '%s AGENTS%s%s  %s%s\n\n' \
         "$C_BOLD$C_CYAN" "$C_RESET" "$C_GRAY" "$(date +%H:%M:%S)" "$C_RESET"
 
-    local found=0
+    local g_claude='' g_codex='' m_claude='' m_codex='' n_claude=0 n_codex=0
     while IFS=$'\t' read -r pane_id addr cmd path; do
         [[ $pane_id == "$SELF_PANE" ]] && continue
-        # 只关心 agent CLI；按需在这里加别的命令名
+        # Only agent CLIs. Add other command names here as needed.
         [[ $cmd =~ ^(claude|codex|node|bun)$ ]] || continue
 
-        local body status extra ctx model dot color
-        # 先滤空行再截断：Codex 的 TUI 在状态行后面留几十行空白，
-        # 直接 tail 会把真正有用的状态行挤出抓取范围。
+        local body client status extra label ctx model dot color entry
+        # Strip blank lines before truncating: Codex leaves dozens of empty
+        # lines below its status line, and a plain tail would push the line we
+        # actually need out of range.
         body=$(tmux capture-pane -p -t "$pane_id" 2>/dev/null \
                | grep -v '^[[:space:]]*$' | tail -30)
-        # 排除误匹配的普通 node 进程
-        [[ $cmd == claude || $cmd == codex ]] || \
-            grep -qE 'esc to interrupt|context left|tokens' <<<"$body" || continue
 
-        found=1
+        client=$(detect_client "$cmd" "$body")
+        [[ -n $client ]] || continue
+
         IFS=$'\t' read -r status extra < <(classify "$pane_id" "$body")
+        label=$(t "$status")
+        case $status in
+            wait) extra=$(t confirm) ;;
+            busy) [[ -n $extra ]] || extra=$(t running) ;;
+        esac
 
-        # 两家的底部状态行格式不同：
-        #   Claude Code: "  arvo2i | Opus 5 (1M context) · medium | [██░░░░░░░░] 22%"
-        #   Codex:       "  gpt-5.6-terra medium · /path · Full Access · Context 1% used · Fast on"
+        # The two CLIs render different status lines:
+        #   Claude Code: "  my-project | Opus 5 (1M context) · medium | [██░░░░░░░░] 22%"
+        #   Codex:       "  gpt-5.6-terra medium · /path · Full Access · Context 1% used"
         ctx=$(grep -oE '\[[█░ ]+\][[:space:]]*[0-9]+%|Context [0-9]+% used' <<<"$body" \
-              | tail -1 | grep -oE '[0-9]+%')
+              | tail -1 | grep -oE '[0-9]+' | tail -1)
         model=$(grep -oE '(Opus|Sonnet|Haiku|Fable) [0-9][^|·]*|gpt-[0-9][^ ]*( [a-z]+)?' <<<"$body" \
                 | tail -1 | sed 's/[[:space:]]*$//')
 
@@ -95,26 +173,75 @@ render() {
             *)    dot='○'; color=$C_GRAY   ;;
         esac
 
-        printf '%s%s%s %s%-7s%s %s\n' \
-            "$color" "$dot" "$C_RESET" "$C_BOLD" "$addr" "$C_RESET" "$(basename "$path")"
-        printf '  %s%s%s%s%s%s\n' \
-            "$color" "$status" "$C_RESET" \
-            "${extra:+$C_DIM · $extra}" \
-            "${ctx:+$C_DIM · ctx $ctx}" "$C_RESET"
-        printf '  %s%s%s\n\n' "$C_DIM$C_GRAY" "${model:-$cmd}" "$C_RESET"
+        printf -v entry '%s%s%s %s%-7s%s %s\n  %s%s%s%s%s\n' \
+            "$color" "$dot" "$C_RESET" "$C_BOLD" "$addr" "$C_RESET" "$(basename "$path")" \
+            "$color" "$label" "$C_RESET" "${extra:+$C_DIM · $extra}" "$C_RESET"
+        [[ -n $ctx ]] && printf -v entry '%s  %s\n' "$entry" "$(ctx_bar "$ctx")"
+        printf -v entry '%s  %s%s%s\n\n' "$entry" "$C_DIM$C_GRAY" "${model:-$cmd}" "$C_RESET"
+
+        # Entry height: header + state (+ context bar) + model + blank line.
+        local height=$(( 4 + (${#ctx} ? 1 : 0) ))
+        if [[ $client == codex ]]; then
+            g_codex+="$entry";  m_codex+="$pane_id $height"$'\n';  n_codex=$(( n_codex + 1 ))
+        else
+            g_claude+="$entry"; m_claude+="$pane_id $height"$'\n'; n_claude=$(( n_claude + 1 ))
+        fi
     done < <(tmux list-panes -a -F \
         '#{pane_id}	#{session_name}:#{window_index}.#{pane_index}	#{pane_current_command}	#{pane_current_path}')
 
-    (( found )) || printf '%s  没有运行中的会话%s\n' "$C_DIM" "$C_RESET"
+    # Record which screen rows belong to which pane, so --click can map a
+    # mouse_y back to a target. Row 0 is the header, row 1 the blank after it.
+    local map_tmp="$CLICK_MAP.$$" line=2
+    : >"$map_tmp"
+
+    emit_group() {  # $1=heading  $2=colour  $3=count  $4=entries  $5=meta
+        (( $3 )) || return 0
+        printf '%s %s%s %s· %d%s\n' "$C_BOLD$2" "$1" "$C_RESET" "$C_DIM" "$3" "$C_RESET"
+        line=$(( line + 1 ))
+        printf '%s' "$4"
+        local pid h
+        while read -r pid h; do
+            [[ -n $pid ]] || continue
+            printf '%d %d %s\n' "$line" "$(( line + h - 1 ))" "$pid" >>"$map_tmp"
+            line=$(( line + h ))
+        done <<<"$5"
+    }
+
+    emit_group 'Claude Code' "$C_CLAUDE" "$n_claude" "$g_claude" "$m_claude"
+    emit_group 'Codex'       "$C_CODEX"  "$n_codex"  "$g_codex"  "$m_codex"
+
+    mv -f "$map_tmp" "$CLICK_MAP" 2>/dev/null || rm -f "$map_tmp"
+
+    (( n_claude + n_codex )) || printf '%s  %s%s\n' "$C_DIM" "$(t none)" "$C_RESET"
 }
 
 if [[ $1 == --once ]]; then render; exit 0; fi
 
-# 开关：当前 window 里已有侧边栏就关掉，否则在左侧开一个
+# Jump to the session the user clicked on. Called from the mouse binding as
+#   --click <sidebar pane id> <mouse_y>
+# where mouse_y is 0-based from the top of the sidebar pane.
+if [[ $1 == --click ]]; then
+    map=$(map_path "$2"); y="${3:-}"
+    [[ -r $map && $y =~ ^[0-9]+$ ]] || exit 0
+    while read -r from to pid; do
+        if (( y >= from && y <= to )); then
+            # switch-client handles a target in another session; select-window
+            # and select-pane cover the same-session case.
+            tmux switch-client -t "$pid" 2>/dev/null
+            tmux select-window -t "$pid" 2>/dev/null
+            tmux select-pane -t "$pid" 2>/dev/null
+            break
+        fi
+    done <"$map"
+    exit 0
+fi
+
+# Toggle: close the sidebar if this window already has one, else open it.
 if [[ $1 == --toggle ]]; then
-    # 锁定到触发所在的 window。run-shell 的子进程环境里没有 TMUX_PANE，
-    # 所以键绑定通过 #{pane_id} 把触发 pane 作为 $2 显式传进来；
-    # 不指定的话 list-panes/split-window 会各自作用于"当前活动 window"，开错地方。
+    # Pin every tmux call to the window the key was pressed in. run-shell does
+    # not export TMUX_PANE to its child, so the key binding passes #{pane_id}
+    # as $2. Without it, list-panes and split-window each fall back to the
+    # *currently active* window and the sidebar opens in the wrong place.
     caller="${2:-$SELF_PANE}"
     tgt=(); [[ -n $caller ]] && tgt=(-t "$caller")
 

@@ -1,27 +1,36 @@
 # tmux-agent-sidebar
 
+English | [简体中文](README.zh-CN.md)
+
 A tmux sidebar that shows every Claude Code / Codex session running across your
-panes, and whether each one is actually working or waiting for you.
+panes — grouped by client, with whether each one is actually working or waiting
+for you. Click an entry to jump straight to that pane.
 
 No plugin manager, no dependencies beyond `tmux` and `bash`. One script.
 
 ```
  AGENTS  15:20:06
 
+ Claude Code · 3
 ● 0:0.1   my-project
-  busy · 7m 44s · ctx 9%
+  busy · 7m 44s
+  █░░░░░░░░░ 9%
   Opus 5 (1M context)
 
 ▲ 0:1.0   api-server
-  wait · needs confirmation · ctx 23%
+  wait · needs confirmation
+  ██░░░░░░░░ 23%
   Opus 5 (1M context)
 
 ✓ 0:1.1   api-server
-  done · 3m · ctx 13%
+  done · 3m
+  █░░░░░░░░░ 13%
   Opus 5 (1M context)
 
+ Codex · 1
 ○ 0:3.0   scratch
-  idle · ctx 1%
+  idle
+  █░░░░░░░░░ 1%
   gpt-5.6-terra medium
 ```
 
@@ -33,7 +42,7 @@ No plugin manager, no dependencies beyond `tmux` and `bash`. One script.
 | ○    | `idle` | Sitting at an empty prompt                 |
 
 Each entry shows the tmux address (`session:window.pane`), the working
-directory, the model, and context usage.
+directory, a context-usage bar, and the model.
 
 ## Install
 
@@ -46,11 +55,17 @@ chmod +x ~/.local/bin/tmux-agent-sidebar.sh
 Add to `~/.tmux.conf`:
 
 ```tmux
+# prefix + a toggles the sidebar
 bind a run-shell '~/.local/bin/tmux-agent-sidebar.sh --toggle #{pane_id}'
+
+# Click an entry to jump to it; clicks elsewhere behave normally
+set -g mouse on
+bind -n MouseDown1Pane if -F '#{==:#{@agent_sidebar},1}' \
+    "run-shell '~/.local/bin/tmux-agent-sidebar.sh --click #{pane_id} #{mouse_y}'" \
+    'select-pane -t=; send-keys -M'
 ```
 
-Reload with `tmux source-file ~/.tmux.conf`, then press `prefix + a` to toggle
-the sidebar.
+Reload with `tmux source-file ~/.tmux.conf`, then press `prefix + a`.
 
 Passing `#{pane_id}` is not optional. `run-shell` does not export `TMUX_PANE`
 to its child, and without an explicit target both `list-panes` and
@@ -67,11 +82,20 @@ tmux-agent-sidebar.sh --once       # print one frame and exit
 tmux-agent-sidebar.sh --toggle     # open/close the sidebar pane
 ```
 
-`SIDEBAR_WIDTH` sets the pane width (default `34`):
+### Options
+
+| Variable        | Default | Meaning                                  |
+|-----------------|---------|------------------------------------------|
+| `SIDEBAR_WIDTH` | `34`    | Sidebar pane width in columns            |
+| `SIDEBAR_LANG`  | locale  | `en` or `zh`; falls back to `$LC_ALL` / `$LC_MESSAGES` / `$LANG` |
 
 ```tmux
-bind a run-shell 'SIDEBAR_WIDTH=42 ~/.local/bin/tmux-agent-sidebar.sh --toggle #{pane_id}'
+bind a run-shell 'SIDEBAR_WIDTH=42 SIDEBAR_LANG=en ~/.local/bin/tmux-agent-sidebar.sh --toggle #{pane_id}'
 ```
+
+A `zh_CN` environment gets Chinese labels automatically. State detection never
+depends on the locale — `classify()` returns fixed English keys and translation
+happens only at render time.
 
 ## How the busy/idle detection works
 
@@ -100,21 +124,36 @@ refreshes: if the seconds are still ticking, it is genuinely running.
 `wait` is checked first, since a permission prompt replaces the spinner
 entirely.
 
-## Adding another agent CLI
+## How click-to-jump works
 
-Two places, both near the top of `render()`:
+tmux cannot attach a callback to a region of pane text, so the sidebar keeps
+its own hit map. On every refresh it writes `<first row> <last row> <pane id>`
+per entry to a file under `$TMPDIR`, named after the sidebar's own pane id so
+multiple sidebars do not collide. The mouse binding passes `#{mouse_y}`, and
+`--click` looks up which range contains that row.
 
-1. The command-name filter — `[[ $cmd =~ ^(claude|codex|node|bun)$ ]]`.
-   `node`/`bun` are accepted only if the pane also looks like an agent TUI,
-   so a stray dev server does not show up.
-2. The status-line parsing for model and context. The two supported formats:
+Jumping uses `switch-client`, `select-window` and `select-pane` together, which
+covers targets in another window or another session. Clicks on headings or
+blank rows match no range and do nothing.
 
-   ```
-   Claude Code:  my-project | Opus 5 (1M context) · medium | [██░░░░░░░░] 22%
-   Codex:        gpt-5.6-terra medium · /path · Full Access · Context 1% used
-   ```
+## Client detection
 
-State classification lives in one function, `classify()`.
+Panes running `claude` or `codex` directly are classified by command name.
+When an agent is launched through a wrapper (`node`, `bun`), the client is
+inferred from what the TUI renders — `OpenAI Codex` / `Context N% used` for
+Codex, `(1M context)` / `bypass permissions` / `esc to interrupt` for Claude
+Code. A `node` pane matching neither is not an agent and is skipped, so a stray
+dev server never shows up.
+
+To support another CLI, extend `detect_client()`, the command-name filter in
+`render()`, and the status-line parsing for model and context:
+
+```
+Claude Code:  my-project | Opus 5 (1M context) · medium | [██░░░░░░░░] 22%
+Codex:        gpt-5.6-terra medium · /path · Full Access · Context 1% used
+```
+
+State classification lives in `classify()`; display strings live in `t()`.
 
 ## Notes
 
