@@ -8,7 +8,7 @@
 不需要插件管理器，除 `tmux` 和 `bash` 外无任何依赖，只有一个脚本。
 
 ```
- AGENTS  15:20:06
+ AGENTS
 
  Claude Code · 3
 ● 0:0.1   my-project
@@ -40,8 +40,7 @@
 | ✓    | `已完成` | 刚跑完，输出还留在屏幕上   |
 | ○    | `空闲`   | 停在空输入框               |
 
-每个条目显示 tmux 地址（`session:window.pane`）、工作目录、context 用量进度条
-和模型名。
+上面每一项都可以单独关掉，见 [配置](#配置)。
 
 ## 安装
 
@@ -54,8 +53,9 @@ chmod +x ~/.local/bin/tmux-agent-sidebar.sh
 加进 `~/.tmux.conf`：
 
 ```tmux
-# prefix + a 开关侧边栏
+# prefix + a 开关侧边栏，prefix + A 打开设置面板
 bind a run-shell '~/.local/bin/tmux-agent-sidebar.sh --toggle #{pane_id}'
+bind A display-popup -E -w 46 -h 15 '~/.local/bin/tmux-agent-sidebar.sh --config'
 
 # 点击条目跳转；点其他地方保持 tmux 默认行为
 set -g mouse on
@@ -77,9 +77,46 @@ tmux-agent-sidebar.sh              # 前台运行，每 2 秒刷新
 tmux-agent-sidebar.sh 5            # 每 5 秒刷新
 tmux-agent-sidebar.sh --once       # 只输出一帧就退出
 tmux-agent-sidebar.sh --toggle     # 开关侧边栏 pane
+tmux-agent-sidebar.sh --config     # 设置面板
 ```
 
-### 可选配置
+## 配置
+
+`prefix + A` 打开面板，切换侧边栏显示哪些内容：
+
+```
+  侧边栏显示设置
+
+  ❯ [ ] 顶部时间
+    [✓] 客户端分组
+    [✓] 工作目录
+    [✓] 已耗时
+    [✓] context 进度条
+    [✓] 模型名称
+    [✓] 显示空闲会话
+
+  ↑↓/jk 移动    空格 切换    q 保存退出
+```
+
+| 键        | 默认  | 控制的内容                     |
+|-----------|-------|--------------------------------|
+| `clock`   | `off` | 标题旁的时间                   |
+| `groups`  | `on`  | `Claude Code` / `Codex` 分组标题 |
+| `path`    | `on`  | 条目首行的工作目录             |
+| `elapsed` | `on`  | 状态旁的已耗时                 |
+| `ctxbar`  | `on`  | context 用量进度条             |
+| `model`   | `on`  | 模型名称                       |
+| `idle`    | `on`  | 是否列出空闲会话               |
+
+配置以 `key=value` 逐行存放在
+`${XDG_CONFIG_HOME:-~/.config}/tmux-agent-sidebar.conf`，所以你也可以直接编辑
+这个文件，或者把它放进自己的 dotfiles。正在运行的侧边栏每次刷新都会重读它，改完
+一个刷新周期内就生效，不用重启。
+
+关掉某些元素后条目会变矮，而点击命中表是用渲染时同一套数字算出来的，所以任意
+开关组合下点击跳转都不会错位。
+
+### 环境变量
 
 | 变量            | 默认值 | 说明                                     |
 |-----------------|--------|------------------------------------------|
@@ -143,7 +180,8 @@ Claude Code:  my-project | Opus 5 (1M context) · medium | [██░░░░�
 Codex:        gpt-5.6-terra medium · /path · Full Access · Context 1% used
 ```
 
-状态判定集中在 `classify()`，显示文案集中在 `t()`。
+状态判定集中在 `classify()`，显示文案集中在 `t()`，可开关的元素声明在
+`CONFIG_SPEC`。
 
 ## 说明
 

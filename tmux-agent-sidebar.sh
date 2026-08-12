@@ -23,6 +23,49 @@ mkdir -p "$STATE_DIR"
 map_path() { printf '%s/click-%s.map' "$STATE_DIR" "${1//[^a-zA-Z0-9]/_}"; }
 CLICK_MAP=$(map_path "$SELF_PANE")
 
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/tmux-agent-sidebar.conf"
+
+# Toggleable display elements: key|default|English label|中文标签
+CONFIG_SPEC=(
+    'clock|off|Clock in header|顶部时间'
+    'groups|on|Client group headings|客户端分组'
+    'path|on|Working directory|工作目录'
+    'elapsed|on|Elapsed time|已耗时'
+    'ctxbar|on|Context usage bar|context 进度条'
+    'model|on|Model name|模型名称'
+    'idle|on|Show idle sessions|显示空闲会话'
+)
+
+declare -A CFG
+
+load_config() {
+    local spec key def
+    for spec in "${CONFIG_SPEC[@]}"; do
+        IFS='|' read -r key def _ <<<"$spec"
+        CFG["$key"]="$def"
+    done
+    [[ -r $CONFIG_FILE ]] || return 0
+    local k v
+    while IFS='=' read -r k v; do
+        [[ -n ${CFG[$k]+set} && ( $v == on || $v == off ) ]] && CFG["$k"]="$v"
+    done <"$CONFIG_FILE"
+    return 0
+}
+
+save_config() {
+    mkdir -p "$(dirname "$CONFIG_FILE")" || return 1
+    local spec key
+    {
+        for spec in "${CONFIG_SPEC[@]}"; do
+            IFS='|' read -r key _ <<<"$spec"
+            printf '%s=%s\n' "$key" "${CFG[$key]}"
+        done
+    } >"$CONFIG_FILE.$$" && mv -f "$CONFIG_FILE.$$" "$CONFIG_FILE"
+}
+
+# Is a display element enabled?
+on() { [[ ${CFG[$1]:-off} == on ]]; }
+
 case "${SIDEBAR_LANG:-${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}}" in
     zh|zh[-_]*|*zh_CN*|*zh_SG*|*zh_TW*|*zh_HK*) I18N=zh ;;
     *)                                          I18N=en ;;
@@ -132,8 +175,14 @@ ctx_bar() {
 }
 
 render() {
-    printf '%s AGENTS%s%s  %s%s\n\n' \
-        "$C_BOLD$C_CYAN" "$C_RESET" "$C_GRAY" "$(date +%H:%M:%S)" "$C_RESET"
+    load_config
+
+    if on clock; then
+        printf '%s AGENTS%s%s  %s%s\n\n' \
+            "$C_BOLD$C_CYAN" "$C_RESET" "$C_GRAY" "$(date +%H:%M:%S)" "$C_RESET"
+    else
+        printf '%s AGENTS%s\n\n' "$C_BOLD$C_CYAN" "$C_RESET"
+    fi
 
     local g_claude='' g_codex='' m_claude='' m_codex='' n_claude=0 n_codex=0
     while IFS=$'\t' read -r pane_id addr cmd path; do
@@ -152,11 +201,14 @@ render() {
         [[ -n $client ]] || continue
 
         IFS=$'\t' read -r status extra < <(classify "$pane_id" "$body")
+        on idle || [[ $status != idle ]] || continue
         label=$(t "$status")
         case $status in
             wait) extra=$(t confirm) ;;
             busy) [[ -n $extra ]] || extra=$(t running) ;;
         esac
+        # "elapsed" only governs timings; a wait entry keeps its explanation.
+        [[ $status == wait ]] || on elapsed || extra=''
 
         # The two CLIs render different status lines:
         #   Claude Code: "  my-project | Opus 5 (1M context) · medium | [██░░░░░░░░] 22%"
@@ -173,14 +225,20 @@ render() {
             *)    dot='○'; color=$C_GRAY   ;;
         esac
 
-        printf -v entry '%s%s%s %s%-7s%s %s\n  %s%s%s%s%s\n' \
-            "$color" "$dot" "$C_RESET" "$C_BOLD" "$addr" "$C_RESET" "$(basename "$path")" \
+        local dir='' height=3   # header + state + trailing blank line
+        on path && dir=" $(basename "$path")"
+        printf -v entry '%s%s%s %s%-7s%s%s\n  %s%s%s%s%s\n' \
+            "$color" "$dot" "$C_RESET" "$C_BOLD" "$addr" "$C_RESET" "$dir" \
             "$color" "$label" "$C_RESET" "${extra:+$C_DIM · $extra}" "$C_RESET"
-        [[ -n $ctx ]] && printf -v entry '%s  %s\n' "$entry" "$(ctx_bar "$ctx")"
-        printf -v entry '%s  %s%s%s\n\n' "$entry" "$C_DIM$C_GRAY" "${model:-$cmd}" "$C_RESET"
-
-        # Entry height: header + state (+ context bar) + model + blank line.
-        local height=$(( 4 + (${#ctx} ? 1 : 0) ))
+        if [[ -n $ctx ]] && on ctxbar; then
+            printf -v entry '%s  %s\n' "$entry" "$(ctx_bar "$ctx")"
+            height=$(( height + 1 ))
+        fi
+        if on model; then
+            printf -v entry '%s  %s%s%s\n' "$entry" "$C_DIM$C_GRAY" "${model:-$cmd}" "$C_RESET"
+            height=$(( height + 1 ))
+        fi
+        entry+=$'\n'
         if [[ $client == codex ]]; then
             g_codex+="$entry";  m_codex+="$pane_id $height"$'\n';  n_codex=$(( n_codex + 1 ))
         else
@@ -196,8 +254,10 @@ render() {
 
     emit_group() {  # $1=heading  $2=colour  $3=count  $4=entries  $5=meta
         (( $3 )) || return 0
-        printf '%s %s%s %s· %d%s\n' "$C_BOLD$2" "$1" "$C_RESET" "$C_DIM" "$3" "$C_RESET"
-        line=$(( line + 1 ))
+        if on groups; then
+            printf '%s %s%s %s· %d%s\n' "$C_BOLD$2" "$1" "$C_RESET" "$C_DIM" "$3" "$C_RESET"
+            line=$(( line + 1 ))
+        fi
         printf '%s' "$4"
         local pid h
         while read -r pid h; do
@@ -214,6 +274,63 @@ render() {
 
     (( n_claude + n_codex )) || printf '%s  %s%s\n' "$C_DIM" "$(t none)" "$C_RESET"
 }
+
+# Interactive toggle panel, meant to be run inside `tmux display-popup -E`.
+config_panel() {
+    load_config
+    local n=${#CONFIG_SPEC[@]} sel=0 title hint i key label le lz mark box ch rest
+
+    if [[ $I18N == zh ]]; then
+        title='侧边栏显示设置'
+        hint='↑↓/jk 移动    空格 切换    q 保存退出'
+    else
+        title='Sidebar display settings'
+        hint='↑↓/jk move    space toggle    q save & quit'
+    fi
+
+    trap 'tput cnorm 2>/dev/null' EXIT
+    tput civis 2>/dev/null
+
+    while :; do
+        printf '\033[H\033[2J'
+        printf '  %s%s%s\n\n' "$C_BOLD$C_CYAN" "$title" "$C_RESET"
+
+        for ((i = 0; i < n; i++)); do
+            IFS='|' read -r key _ le lz <<<"${CONFIG_SPEC[$i]}"
+            [[ $I18N == zh ]] && label="$lz" || label="$le"
+            (( i == sel )) && mark="${C_CYAN}❯${C_RESET}" || mark=' '
+            if on "$key"; then
+                box="${C_GREEN}[✓]${C_RESET}"
+            else
+                box="${C_GRAY}[ ]${C_RESET}"
+            fi
+            printf '  %s %s %s\n' "$mark" "$box" "$label"
+        done
+
+        printf '\n  %s%s%s\n' "$C_DIM" "$hint" "$C_RESET"
+
+        IFS= read -rsn1 ch || break
+        case $ch in
+            $'\x1b')                       # arrow keys arrive as ESC [ A/B
+                read -rsn2 -t 0.05 rest
+                case $rest in
+                    '[A') sel=$(( (sel - 1 + n) % n )) ;;
+                    '[B') sel=$(( (sel + 1) % n )) ;;
+                esac ;;
+            k|K)   sel=$(( (sel - 1 + n) % n )) ;;
+            j|J)   sel=$(( (sel + 1) % n )) ;;
+            ' '|'')
+                IFS='|' read -r key _ <<<"${CONFIG_SPEC[$sel]}"
+                if on "$key"; then CFG[$key]=off; else CFG[$key]=on; fi ;;
+            q|Q)   break ;;
+        esac
+    done
+
+    save_config          # cursor is restored by the EXIT trap
+    printf '\033[H\033[2J'
+}
+
+if [[ $1 == --config ]]; then config_panel; exit 0; fi
 
 if [[ $1 == --once ]]; then render; exit 0; fi
 

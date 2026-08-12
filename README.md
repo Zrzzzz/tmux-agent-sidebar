@@ -9,7 +9,7 @@ for you. Click an entry to jump straight to that pane.
 No plugin manager, no dependencies beyond `tmux` and `bash`. One script.
 
 ```
- AGENTS  15:20:06
+ AGENTS
 
  Claude Code · 3
 ● 0:0.1   my-project
@@ -41,8 +41,8 @@ No plugin manager, no dependencies beyond `tmux` and `bash`. One script.
 | ✓    | `done` | Just finished; output still on screen      |
 | ○    | `idle` | Sitting at an empty prompt                 |
 
-Each entry shows the tmux address (`session:window.pane`), the working
-directory, a context-usage bar, and the model.
+Every element above can be turned off individually — see
+[Configuration](#configuration).
 
 ## Install
 
@@ -55,8 +55,9 @@ chmod +x ~/.local/bin/tmux-agent-sidebar.sh
 Add to `~/.tmux.conf`:
 
 ```tmux
-# prefix + a toggles the sidebar
+# prefix + a toggles the sidebar, prefix + A opens the settings panel
 bind a run-shell '~/.local/bin/tmux-agent-sidebar.sh --toggle #{pane_id}'
+bind A display-popup -E -w 46 -h 15 '~/.local/bin/tmux-agent-sidebar.sh --config'
 
 # Click an entry to jump to it; clicks elsewhere behave normally
 set -g mouse on
@@ -80,9 +81,47 @@ tmux-agent-sidebar.sh              # run in the foreground, refresh every 2s
 tmux-agent-sidebar.sh 5            # refresh every 5s
 tmux-agent-sidebar.sh --once       # print one frame and exit
 tmux-agent-sidebar.sh --toggle     # open/close the sidebar pane
+tmux-agent-sidebar.sh --config     # settings panel
 ```
 
-### Options
+## Configuration
+
+`prefix + A` opens a panel for toggling what the sidebar shows:
+
+```
+  Sidebar display settings
+
+  ❯ [ ] Clock in header
+    [✓] Client group headings
+    [✓] Working directory
+    [✓] Elapsed time
+    [✓] Context usage bar
+    [✓] Model name
+    [✓] Show idle sessions
+
+  ↑↓/jk move    space toggle    q save & quit
+```
+
+| Key       | Default | Element                                   |
+|-----------|---------|-------------------------------------------|
+| `clock`   | `off`   | Clock next to the header                  |
+| `groups`  | `on`    | `Claude Code` / `Codex` group headings    |
+| `path`    | `on`    | Working directory on the entry's top line |
+| `elapsed` | `on`    | Elapsed time next to the state            |
+| `ctxbar`  | `on`    | Context usage bar                         |
+| `model`   | `on`    | Model name                                |
+| `idle`    | `on`    | List sessions that are sitting idle       |
+
+Settings are stored as `key=value` lines in
+`${XDG_CONFIG_HOME:-~/.config}/tmux-agent-sidebar.conf`, so you can also edit
+the file directly or keep it in your dotfiles. A running sidebar re-reads it on
+every refresh — changes show up within one interval, no restart needed.
+
+Turning elements off shrinks each entry, and the click map is rebuilt from the
+same numbers that drive rendering, so click-to-jump stays aligned in every
+combination.
+
+### Environment variables
 
 | Variable        | Default | Meaning                                  |
 |-----------------|---------|------------------------------------------|
@@ -153,7 +192,8 @@ Claude Code:  my-project | Opus 5 (1M context) · medium | [██░░░░�
 Codex:        gpt-5.6-terra medium · /path · Full Access · Context 1% used
 ```
 
-State classification lives in `classify()`; display strings live in `t()`.
+State classification lives in `classify()`; display strings live in `t()`;
+toggleable elements are declared in `CONFIG_SPEC`.
 
 ## Notes
 
