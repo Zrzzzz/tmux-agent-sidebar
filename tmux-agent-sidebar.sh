@@ -165,8 +165,9 @@ detect_client() {
 ctx_bar() {
     local pct="$1" width=10 filled i out='' c=$C_GREEN
     filled=$(( pct * width / 100 ))
-    (( filled > width )) && filled=$width
-    (( filled < 0 ))     && filled=0
+    (( filled > width ))       && filled=$width
+    (( filled < 0 ))           && filled=0
+    (( pct > 0 && filled == 0 )) && filled=1   # never render nonzero as empty
     for ((i = 0; i < width; i++)); do
         (( i < filled )) && out+='█' || out+='░'
     done
@@ -367,9 +368,13 @@ if [[ $1 == --toggle ]]; then
     if [[ -n $existing ]]; then
         tmux kill-pane -t "$existing"
     else
-        new=$(tmux split-window "${tgt[@]}" -hbd -l "${SIDEBAR_WIDTH:-34}" \
+        width="${SIDEBAR_WIDTH:-34}"
+        new=$(tmux split-window "${tgt[@]}" -hbd -l "$width" \
                 -P -F '#{pane_id}' "exec '$0'")
         tmux set-option -p -t "$new" @agent_sidebar 1
+        # split-window -l is not always honoured: a window that has had panes
+        # closed keeps layout history that overrides it. Set the width again.
+        tmux resize-pane -t "$new" -x "$width" 2>/dev/null
     fi
     exit 0
 fi
