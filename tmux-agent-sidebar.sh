@@ -406,6 +406,73 @@ if [[ $1 == --click ]]; then
     exit 0
 fi
 
+# Open a sidebar in the window holding $1 (a pane, window or session target);
+# does nothing if that window already has one.
+open_sidebar() {
+    local tgt=() width new
+    [[ -n $1 ]] && tgt=(-t "$1")
+    [[ -n $(sidebar_pane "$1") ]] && return 0
+    width=$(sidebar_width "$1")
+    new=$(tmux split-window "${tgt[@]}" -hbd -l "$width" \
+            -P -F '#{pane_id}' "exec '$0'") || return 1
+    tmux set-option -p -t "$new" @agent_sidebar 1
+    # split-window -l is not always honoured: a window that has had panes
+    # closed keeps layout history that overrides it. Set the width again.
+    tmux resize-pane -t "$new" -x "$width" 2>/dev/null
+}
+
+# Sidebar pane of the window holding $1, empty if there is none.
+sidebar_pane() {
+    local tgt=(); [[ -n $1 ]] && tgt=(-t "$1")
+    tmux list-panes "${tgt[@]}" -F '#{pane_id} #{@agent_sidebar}' 2>/dev/null \
+        | awk '$2=="1"{print $1; exit}'
+}
+
+# Width a new sidebar should get: an explicit $SIDEBAR_WIDTH wins, otherwise
+# the width the session last settled on (see --sync-width), otherwise 34.
+sidebar_width() {
+    local tgt=() sess stored
+    if [[ -n ${SIDEBAR_WIDTH:-} ]]; then printf '%s' "$SIDEBAR_WIDTH"; return; fi
+    [[ -n $1 ]] && tgt=(-t "$1")
+    # The option lives on the session, so resolve the target to one first: a
+    # pane or window id is not a valid target-session for show-options.
+    sess=$(tmux display-message "${tgt[@]}" -p '#{session_id}' 2>/dev/null)
+    stored=$(tmux show-options -t "$sess" -qv @agent_sidebar_width 2>/dev/null)
+    [[ $stored =~ ^[0-9]+$ ]] && printf '%s' "$stored" || printf '34'
+}
+
+# --sync-width [target]: give every sidebar in the session the width of the one
+# in target's window. Bound to after-resize-pane by --toggle-session, so
+# dragging one sidebar's border resizes them all; also remembers the width on
+# the session, so windows opened later match.
+if [[ $1 == --sync-width ]]; then
+    tgt="$2"; [[ $tgt == *'#{'* ]] && tgt=''
+    src=$(sidebar_pane "$tgt")
+    [[ -z $src ]] && exit 0
+    width=$(tmux display-message -t "$src" -p '#{pane_width}')
+    [[ $width =~ ^[0-9]+$ ]] || exit 0
+    sess=$(tmux display-message -t "$src" -p '#{session_id}')
+    tmux set-option -t "$sess" @agent_sidebar_width "$width"
+    # Only touch panes that are actually a different width: resize-pane fires
+    # after-resize-pane again, and a no-op pass is what ends the cascade.
+    while read -r pane w flag; do
+        [[ $flag == 1 && $pane != "$src" && $w != "$width" ]] || continue
+        tmux resize-pane -t "$pane" -x "$width" 2>/dev/null
+    done < <(tmux list-panes -s -t "$sess" \
+             -F '#{pane_id} #{pane_width} #{@agent_sidebar}')
+    exit 0
+fi
+
+# --open [target]: used by the after-new-window hook that --toggle-session
+# installs, so windows created later get a sidebar too. The hook passes the new
+# window's id; tmux versions that do not expand formats in `run-shell` pass the
+# literal string instead, in which case fall back to the active window.
+if [[ $1 == --open ]]; then
+    tgt="$2"; [[ $tgt == *'#{'* ]] && tgt=''
+    open_sidebar "$tgt"
+    exit 0
+fi
+
 # Toggle: close the sidebar if this window already has one, else open it.
 if [[ $1 == --toggle ]]; then
     # Pin every tmux call to the window the key was pressed in. run-shell does
@@ -413,20 +480,39 @@ if [[ $1 == --toggle ]]; then
     # as $2. Without it, list-panes and split-window each fall back to the
     # *currently active* window and the sidebar opens in the wrong place.
     caller="${2:-$SELF_PANE}"
-    tgt=(); [[ -n $caller ]] && tgt=(-t "$caller")
-
-    existing=$(tmux list-panes "${tgt[@]}" -F '#{pane_id} #{@agent_sidebar}' \
-               | awk '$2=="1"{print $1; exit}')
+    existing=$(sidebar_pane "$caller")
     if [[ -n $existing ]]; then
         tmux kill-pane -t "$existing"
     else
-        width="${SIDEBAR_WIDTH:-34}"
-        new=$(tmux split-window "${tgt[@]}" -hbd -l "$width" \
-                -P -F '#{pane_id}' "exec '$0'")
-        tmux set-option -p -t "$new" @agent_sidebar 1
-        # split-window -l is not always honoured: a window that has had panes
-        # closed keeps layout history that overrides it. Set the width again.
-        tmux resize-pane -t "$new" -x "$width" 2>/dev/null
+        open_sidebar "$caller"
+    fi
+    exit 0
+fi
+
+# Session-wide toggle: a sidebar in every window of the session, including the
+# ones opened afterwards. tmux panes cannot be shared between windows, so this
+# is one sidebar pane per window, all reading the same state files.
+if [[ $1 == --toggle-session ]]; then
+    caller="${2:-$SELF_PANE}"
+    tgt=(); [[ -n $caller ]] && tgt=(-t "$caller")
+    sess=$(tmux display-message "${tgt[@]}" -p '#{session_id}') || exit 1
+
+    existing=$(tmux list-panes -s -t "$sess" -F '#{pane_id} #{@agent_sidebar}' \
+               | awk '$2=="1"{print $1}')
+    if [[ -n $existing ]]; then
+        for pane in $existing; do tmux kill-pane -t "$pane" 2>/dev/null; done
+        # Index the hook so removing ours leaves any other after-new-window
+        # hook the user has set in place.
+        tmux set-hook -u -t "$sess" 'after-new-window[99]' 2>/dev/null
+        tmux set-hook -u -t "$sess" 'after-resize-pane[99]' 2>/dev/null
+    else
+        while read -r win; do
+            [[ -n $win ]] && open_sidebar "$win"
+        done < <(tmux list-windows -t "$sess" -F '#{window_id}')
+        tmux set-hook -t "$sess" 'after-new-window[99]' \
+            "run-shell -b \"'$0' --open '#{window_id}'\""
+        tmux set-hook -t "$sess" 'after-resize-pane[99]' \
+            "run-shell -b \"'$0' --sync-width '#{pane_id}'\""
     fi
     exit 0
 fi
@@ -435,7 +521,7 @@ fi
 # handing it to sleep, which reports it as an illegal option.
 if [[ ! $INTERVAL =~ ^[0-9]+([.][0-9]+)?$ ]]; then
     printf '%s: unknown argument %s\n' "${0##*/}" "$INTERVAL" >&2
-    printf 'usage: %s [refresh seconds | --once | --toggle | --config]\n' \
+    printf 'usage: %s [refresh seconds | --once | --toggle | --toggle-session | --config]\n' \
         "${0##*/}" >&2
     exit 2
 fi

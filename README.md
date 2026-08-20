@@ -74,6 +74,25 @@ bind -n MouseDown1Pane if -F '#{==:#{@agent_sidebar},1}' \
 
 Reload with `tmux source-file ~/.tmux.conf`, then press `prefix + a`.
 
+### One sidebar per window, or one per session
+
+`--toggle` opens a sidebar in the current window only. tmux panes cannot be
+shared between windows, so covering a whole session means one sidebar pane per
+window — that is what `--toggle-session` does. It opens one in every window of
+the session and installs an `after-new-window` hook so windows created later
+get one too; running it again closes them all and removes the hook.
+
+```tmux
+# prefix + a for this window, prefix + S for the whole session
+bind a run-shell '~/.local/bin/tmux-agent-sidebar.sh --toggle #{pane_id}'
+bind S run-shell '~/.local/bin/tmux-agent-sidebar.sh --toggle-session #{pane_id}'
+```
+
+Every sidebar reads the same state files, so they all show the same sessions.
+Width is shared too: drag one sidebar's border and the rest follow, and the
+session remembers that width for windows opened later. `SIDEBAR_WIDTH`, when
+set, still wins over the remembered value.
+
 ### Wire up the agents
 
 Nothing appears in the sidebar until at least one agent reports to it.

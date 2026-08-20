@@ -74,6 +74,23 @@ bind -n MouseDown1Pane if -F '#{==:#{@agent_sidebar},1}' \
 
 `tmux source-file ~/.tmux.conf` 重载后按 `prefix + a`。
 
+### 只开当前 window，还是整个 session
+
+`--toggle` 只在当前 window 开侧边栏。tmux 的 pane 不能跨 window 共享，所以要让
+整个 session 都看得到，只能每个 window 各开一个——这就是 `--toggle-session`：
+它给 session 里现有的每个 window 都开一个侧边栏，并注册 `after-new-window`
+钩子，之后新建的 window 也会自动带上；再执行一次则全部关闭并移除钩子。
+
+```tmux
+# prefix + a 只管当前 window，prefix + S 管整个 session
+bind a run-shell '~/.local/bin/tmux-agent-sidebar.sh --toggle #{pane_id}'
+bind S run-shell '~/.local/bin/tmux-agent-sidebar.sh --toggle-session #{pane_id}'
+```
+
+所有侧边栏读的是同一批状态文件，显示的内容完全一致。宽度也是同步的：拖动其中
+一个侧边栏的边框，其余的会跟着变，session 也会记住这个宽度，之后新建的 window
+按它来开。如果设了 `SIDEBAR_WIDTH`，仍以它为准。
+
 ### 接入 agent
 
 侧边栏里什么都不会出现，直到至少有一个 agent 向它上报。
