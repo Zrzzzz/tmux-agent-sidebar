@@ -136,6 +136,7 @@ tmux-agent-sidebar.sh --config     # settings panel
     [✓] Client group headings
     [ ] Pane address (0:1.2)
     [✓] Session title
+    [ ] Session title as tmux window name
     [✓] Working directory
     [✓] Current tool call
     [✓] Subagent count
@@ -154,6 +155,7 @@ tmux-agent-sidebar.sh --config     # settings panel
 | `groups`    | `on`    | `Claude Code` / `Codex` group headings    |
 | `addr`      | `off`   | tmux address, `session:window.pane`       |
 | `title`     | `on`    | Session title                             |
+| `wintab`    | `off`   | Rename the tmux window to the session title |
 | `path`      | `on`    | Working directory on the entry's top line |
 | `tool`      | `on`    | Tool currently executing                  |
 | `subagents` | `on`    | Number of running subagents               |
@@ -167,6 +169,16 @@ Settings are stored as `key=value` lines in
 `${XDG_CONFIG_HOME:-~/.config}/tmux-agent-sidebar.conf`, so you can also edit
 the file directly or keep it in your dotfiles. A running sidebar re-reads it on
 every refresh — changes show up within one interval, no restart needed.
+
+`wintab` is the one key that changes something outside the sidebar: with it on,
+the collector renames the tmux window holding an agent to that agent's session
+title, so the tab in the status bar reads `refactor the parser` instead of
+`zsh`. It renames only when the title changes, truncates to 30 characters, and
+restores tmux's `automatic-rename` once the last agent in the window is gone.
+It works whether or not a sidebar is open — the rename happens in the hook, not
+in the renderer. A window holding several agents gets all of their titles, in
+pane order, joined by ` | ` (`refactor the parser | write the tests`) and capped
+at 60 characters; when one of them exits its title drops out of the name.
 
 Turning elements off shrinks each entry, and the click map is rebuilt from the
 same numbers that drive rendering, so click-to-jump stays aligned in every

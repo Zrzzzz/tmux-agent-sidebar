@@ -36,6 +36,7 @@ CONFIG_SPEC=(
     'groups|on|Client group headings|客户端分组'
     'addr|off|Pane address (0:1.2)|pane 地址 (0:1.2)'
     'title|on|Session title|会话标题'
+    'wintab|off|Session title as tmux window name|用会话标题命名 tmux 窗口'
     'path|on|Working directory|工作目录'
     'tool|on|Current tool call|当前工具调用'
     'subagents|on|Subagent count|子 agent 数量'

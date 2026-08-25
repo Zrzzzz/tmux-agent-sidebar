@@ -37,8 +37,52 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/tmux-agent-sidebar/panes"
 mkdir -p "$STATE_DIR" 2>/dev/null || exit 0
 file="$STATE_DIR/${pane//[^a-zA-Z0-9]/_}.json"
 
+# Mirror the session title into the tmux window name, so the tab in the status
+# bar reads "refactor the parser" instead of "zsh". Off by default; the sidebar
+# settings panel (prefix+A) writes `wintab=on` into the shared config file.
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/tmux-agent-sidebar.conf"
+wintab_on() {
+    command -v tmux >/dev/null 2>&1 || return 1
+    command -v jq >/dev/null 2>&1 || return 1
+    grep -q '^wintab=on[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null
+}
+
+# The title in $1 (a state file or a patch), normalised into something that
+# reads well as a window name.
+tab_name() {
+    jq -r '(.session_name // "") | gsub("[[:space:]]+"; " ")
+           | sub("^[- ]+"; "") | sub(" +$"; "")
+           | .[0:30]' <<<"$1" 2>/dev/null
+}
+
+# A window is one tab but can hold several agents, so the name is every title
+# in it, in pane order, joined by " | ". Empty if no agent there has a title.
+window_tab_name() {
+    local ids id f n out=''
+    ids=$(tmux list-panes -t "$pane" -F '#{pane_id}' 2>/dev/null) || return 0
+    for id in $ids; do
+        f="$STATE_DIR/${id//[^a-zA-Z0-9]/_}.json"
+        [[ -r $f ]] || continue
+        n=$(tab_name "$(cat "$f" 2>/dev/null)")
+        [[ -n $n ]] || continue
+        out="${out:+$out | }$n"
+    done
+    printf '%s' "${out:0:60}"
+}
+
 if [[ $event == session-end ]]; then
     rm -f "$file"
+    if wintab_on; then
+        # Another agent may still be in this window; if not, -u drops the
+        # per-window override rename-window installed and tmux takes the name
+        # back over.
+        name=$(window_tab_name)
+        if [[ -n $name ]]; then
+            tmux rename-window -t "$pane" "$name" 2>/dev/null
+        else
+            tmux set-window-option -t "$pane" -u automatic-rename 2>/dev/null
+        fi
+    fi
     exit 0
 fi
 
@@ -145,5 +189,29 @@ if jq -c -n --argjson old "$old" --argjson patch "$patch" \
     mv -f "$tmp" "$file"
 else
     rm -f "$tmp"
+fi
+
+# The status line is the only event that carries the title, and it fires often,
+# so recompose the name only when this pane's title differs from the one the
+# last rename used — one tmux call per new title, not one per redraw, and the
+# first status line after the option is switched on still renames. Every other
+# agent has its own status line and renames the window itself when its title
+# moves, so nothing is missed. rename-window turns automatic-rename off for the
+# window; session-end puts it back once the last agent there is gone.
+if [[ $event == statusline ]] && wintab_on; then
+    mine=$(tab_name "$patch")
+    used=$(jq -r '.wintab // ""' <<<"$old" 2>/dev/null)
+    if [[ -n $mine && $mine != "$used" ]]; then
+        name=$(window_tab_name)
+        if [[ -n $name ]] && tmux rename-window -t "$pane" "$name" 2>/dev/null; then
+            # Remember what was used, so the next redraw is a no-op.
+            tmp="$file.$$"
+            if jq -c --arg n "$mine" '. + {wintab: $n}' "$file" >"$tmp" 2>/dev/null; then
+                mv -f "$tmp" "$file"
+            else
+                rm -f "$tmp"
+            fi
+        fi
+    fi
 fi
 exit 0

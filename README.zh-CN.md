@@ -135,6 +135,7 @@ tmux-agent-sidebar.sh --config     # 设置面板
     [✓] 客户端分组
     [ ] pane 地址 (0:1.2)
     [✓] 会话标题
+    [ ] 用会话标题命名 tmux 窗口
     [✓] 工作目录
     [✓] 当前工具调用
     [✓] 子 agent 数量
@@ -153,6 +154,7 @@ tmux-agent-sidebar.sh --config     # 设置面板
 | `groups`    | `on`  | `Claude Code` / `Codex` 分组标题 |
 | `addr`      | `off` | tmux 地址 `session:window.pane`  |
 | `title`     | `on`  | 会话标题                         |
+| `wintab`    | `off` | 把 tmux 窗口名改成会话标题       |
 | `path`      | `on`  | 条目首行的工作目录               |
 | `tool`      | `on`  | 正在执行的工具                   |
 | `subagents` | `on`  | 正在跑的子 agent 数量            |
@@ -165,6 +167,14 @@ tmux-agent-sidebar.sh --config     # 设置面板
 配置以 `key=value` 逐行存放在
 `${XDG_CONFIG_HOME:-~/.config}/tmux-agent-sidebar.conf`，可以直接编辑，或者放进
 自己的 dotfiles。正在运行的侧边栏每次刷新都会重读它，改完一个刷新周期内生效。
+
+`wintab` 是唯一会影响侧边栏之外的开关：打开后，采集脚本会把跑着 agent 的那个
+tmux 窗口改名为该 agent 的会话标题，状态栏上的标签页就从 `zsh` 变成
+`重构 parser`。只在标题变化时改名，单个标题超过 30 字符截断，窗口里最后一个
+agent 退出后把 `automatic-rename` 交还给 tmux。它不依赖侧边栏是否打开——改名
+发生在 hook 里，不在渲染器里。一个窗口里有多个 agent 时，按 pane 顺序用 ` | `
+把标题连起来（`重构 parser | 写测试`），整体截断到 60 字符；其中一个退出后，它
+的标题会从窗口名里去掉。
 
 关掉某些元素后条目会变矮，而点击命中表是用渲染时同一套数字算出来的，所以任意
 开关组合下点击跳转都不会错位。
