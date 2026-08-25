@@ -416,6 +416,10 @@ open_sidebar() {
     new=$(tmux split-window "${tgt[@]}" -hbd -l "$width" \
             -P -F '#{pane_id}' "exec '$0'") || return 1
     tmux set-option -p -t "$new" @agent_sidebar 1
+    # A sidebar is not worth a window of its own: once the pane beside it
+    # exits, take the sidebar — and with it the window — down as well.
+    tmux set-hook -w -t "$new" 'pane-exited[99]' \
+        "run-shell -b \"'$0' --reap '#{window_id}'\"" 2>/dev/null
     # split-window -l is not always honoured: a window that has had panes
     # closed keeps layout history that overrides it. Set the width again.
     tmux resize-pane -t "$new" -x "$width" 2>/dev/null
@@ -426,6 +430,20 @@ sidebar_pane() {
     local tgt=(); [[ -n $1 ]] && tgt=(-t "$1")
     tmux list-panes "${tgt[@]}" -F '#{pane_id} #{@agent_sidebar}' 2>/dev/null \
         | awk '$2=="1"{print $1; exit}'
+}
+
+# Close the sidebar in the window holding $1 once every other pane there has
+# gone, so a window whose agent has exited does not linger with just the
+# sidebar in it. Only panes carrying the @agent_sidebar marker are ever killed.
+reap_window() {
+    local tgt=() sidebars='' others=0 id flag
+    [[ -n $1 ]] && tgt=(-t "$1")
+    while read -r id flag; do
+        if [[ $flag == 1 ]]; then sidebars="$sidebars $id"
+        else others=$((others + 1)); fi
+    done < <(tmux list-panes "${tgt[@]}" -F '#{pane_id} #{@agent_sidebar}' 2>/dev/null)
+    (( others == 0 )) || return 0
+    for id in $sidebars; do tmux kill-pane -t "$id" 2>/dev/null; done
 }
 
 # Width a new sidebar should get: an explicit $SIDEBAR_WIDTH wins, otherwise
@@ -463,6 +481,16 @@ if [[ $1 == --sync-width ]]; then
     exit 0
 fi
 
+# --reap [target]: close the sidebar in target's window if nothing else is left
+# there. Bound to pane-exited on every window that gets a sidebar; the render
+# loop repeats the check because on some tmux versions the hook runs before the
+# pane that exited has left the window's pane list.
+if [[ $1 == --reap ]]; then
+    tgt="$2"; [[ $tgt == *'#{'* ]] && tgt=''
+    reap_window "$tgt"
+    exit 0
+fi
+
 # --open [target]: used by the after-new-window hook that --toggle-session
 # installs, so windows created later get a sidebar too. The hook passes the new
 # window's id; tmux versions that do not expand formats in `run-shell` pass the
@@ -482,6 +510,7 @@ if [[ $1 == --toggle ]]; then
     caller="${2:-$SELF_PANE}"
     existing=$(sidebar_pane "$caller")
     if [[ -n $existing ]]; then
+        tmux set-hook -u -w -t "$existing" 'pane-exited[99]' 2>/dev/null
         tmux kill-pane -t "$existing"
     else
         open_sidebar "$caller"
@@ -500,7 +529,10 @@ if [[ $1 == --toggle-session ]]; then
     existing=$(tmux list-panes -s -t "$sess" -F '#{pane_id} #{@agent_sidebar}' \
                | awk '$2=="1"{print $1}')
     if [[ -n $existing ]]; then
-        for pane in $existing; do tmux kill-pane -t "$pane" 2>/dev/null; done
+        for pane in $existing; do
+            tmux set-hook -u -w -t "$pane" 'pane-exited[99]' 2>/dev/null
+            tmux kill-pane -t "$pane" 2>/dev/null
+        done
         # Index the hook so removing ours leaves any other after-new-window
         # hook the user has set in place.
         tmux set-hook -u -t "$sess" 'after-new-window[99]' 2>/dev/null
@@ -535,6 +567,8 @@ trap cleanup EXIT
 printf '\033[?1049h'
 tput civis 2>/dev/null
 while :; do
+    # The pane beside the sidebar may have exited without the hook catching it.
+    reap_window "$SELF_PANE"
     out=$(render)
     printf '\033[H\033[2J%s' "$out"
     sleep "$INTERVAL"

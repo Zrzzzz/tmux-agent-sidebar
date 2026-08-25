@@ -93,6 +93,9 @@ Width is shared too: drag one sidebar's border and the rest follow, and the
 session remembers that width for windows opened later. `SIDEBAR_WIDTH`, when
 set, still wins over the remembered value.
 
+A sidebar never holds a window open by itself: when the last other pane in the
+window exits, the sidebar closes with it and the window goes away.
+
 ### Wire up the agents
 
 Nothing appears in the sidebar until at least one agent reports to it.

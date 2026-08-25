@@ -91,6 +91,9 @@ bind S run-shell '~/.local/bin/tmux-agent-sidebar.sh --toggle-session #{pane_id}
 一个侧边栏的边框，其余的会跟着变，session 也会记住这个宽度，之后新建的 window
 按它来开。如果设了 `SIDEBAR_WIDTH`，仍以它为准。
 
+侧边栏不会自己把 window 撑着：window 里最后一个非侧边栏 pane 退出后，侧边栏会
+跟着关掉，window 也随之消失。
+
 ### 接入 agent
 
 侧边栏里什么都不会出现，直到至少有一个 agent 向它上报。
